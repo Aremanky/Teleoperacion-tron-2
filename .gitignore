@@ -11,7 +11,7 @@ devel/
 .catkin_tools/
 *.pyc
 __pycache__/
-
+venv/
 # --- editor / OS junk ---
 .vscode/
 .idea/
