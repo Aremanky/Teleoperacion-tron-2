@@ -32,6 +32,16 @@ CANDIDATOS_EF = ["grasper_{lado}_Link", "wrist_roll_{lado}_Link"]
 TOL_ESFERICO = 0.03
 
 VEL_MAX = 3.0          # rad/s: velocidad maxima de cada articulacion al seguir al operador
+VEL_PINZA = 2.5        # 1/s: velocidad de apertura y cierre de la pinza (0 a 1 en 0.4 s)
+PINZA_INVERTIDA = False  # True si toda la pinza abre cuando deberia cerrar
+# Juntas que llevan "grasp" en el nombre pero NO forman parte del mecanismo de la
+# pinza (p.ej. la que orienta la pinza entera). Se dejan quietas.
+PINZA_EXCLUIR = ("grasper_base",)
+# Juntas sueltas del mecanismo cuyo sentido hay que invertir (por su nombre exacto)
+PINZA_JUNTAS_INVERTIDAS = ()
+# Recorrido a mano para juntas de la pinza SIN limites en el XML (no se puede
+# adivinar): {"grasper_L_jaw_left_Joint": (cerrado, abierto), ...}
+PINZA_RECORRIDO = {}
 VEL_TRANSICION = 1.5   # rad/s: al cambiar a otra solucion tras un rescate
 MARGEN_LIMITE = 0.1    # rad: junto a un limite se empuja la articulacion hacia dentro
 ERROR_ATASCO = 0.08    # m: error a partir del cual se considera que el brazo esta atascado
@@ -107,9 +117,12 @@ class Brazo:
         self.hi = np.array([m.jnt_range[j][1] for j in juntas], dtype=float)
         self.q_reposo = np.where(self.limitado, np.clip(0.0, self.lo, self.hi), 0.0)
 
+        self._preparar_pinza()
+
         # --- Geometria del brazo, medida en la postura de reposo ---
         self.reposo()
-        mujoco.mj_forward(m, d)
+        mujoco.mj_kinematics(m, d)
+        mujoco.mj_comPos(m, d)
 
         self.hombro, r_h = centro_de_ejes(d, self.j_hombro)
         if r_h > TOL_ESFERICO:
@@ -167,6 +180,97 @@ class Brazo:
         print(f"[aviso] ninguna articulacion contiene '{marca}': uso todas las bisagras de la cadena")
         return bisagras
 
+    # ---------------- pinza ----------------
+    def _preparar_pinza(self):
+        """Busca las articulaciones de la pinza: las que cuelgan del efector final,
+        mas las que llevan 'grasp' en el nombre dentro de este brazo, quitando las
+        de PINZA_EXCLUIR. Para cada una, el extremo del recorrido mas cercano a
+        cero se toma como pinza cerrada y el otro como abierta; asi vale igual
+        para las dos mordazas aunque sus rangos tengan signo opuesto.
+
+        En las pinzas de varillas (cadena cerrada con <equality>) se mueven todas
+        las juntas del mecanismo a la vez, en la misma fraccion de su recorrido.
+        Aqui no se simula fisica, asi que las restricciones de igualdad no se
+        resuelven solas; este reparto proporcional es exacto en los extremos
+        (abierta del todo y cerrada del todo) y muy aproximado por el camino."""
+        m = self.m
+        descendientes = set()
+        for b in range(m.nbody):
+            p = b
+            while p > 0:
+                if p == self.ef:
+                    descendientes.add(b)
+                    break
+                p = int(m.body_parentid[p])
+        juntas, sin_limite = [], []
+        for j in range(m.njnt):
+            if m.jnt_type[j] not in (HINGE, int(mujoco.mjtJoint.mjJNT_SLIDE)):
+                continue
+            n = nombre(m, mujoco.mjtObj.mjOBJ_JOINT, j)
+            if any(x in n for x in PINZA_EXCLUIR):
+                continue
+            if j in self.juntas:      # ya la mueve la IK del brazo
+                continue
+            propia = int(m.jnt_bodyid[j]) in descendientes or (
+                f"_{self.lado}_" in n and "grasp" in n.lower())
+            if propia and (m.jnt_limited[j] or n in PINZA_RECORRIDO):
+                juntas.append(j)
+            elif propia:
+                sin_limite.append(n)   # no se puede mapear: no sabemos su recorrido
+        self.j_pinza = juntas
+        self.n_pinza = [nombre(m, mujoco.mjtObj.mjOBJ_JOINT, j) for j in juntas]
+        self.qadr_pinza = np.array([m.jnt_qposadr[j] for j in juntas], dtype=int)
+        cerrado, abierto = [], []
+        for j, n in zip(juntas, self.n_pinza):
+            lo, hi = PINZA_RECORRIDO.get(n, tuple(m.jnt_range[j]))
+            c, a = (lo, hi) if abs(lo) <= abs(hi) else (hi, lo)
+            if PINZA_INVERTIDA != (n in PINZA_JUNTAS_INVERTIDAS):
+                c, a = a, c
+            cerrado.append(c)
+            abierto.append(a)
+        self.q_cerrado = np.array(cerrado, dtype=float)
+        self.q_abierto = np.array(abierto, dtype=float)
+        self.apertura = 1.0 if juntas else None
+        if not juntas:
+            self._diagnostico_pinza(sin_limite)
+
+    def _diagnostico_pinza(self, sin_limite):
+        """Si no se ha encontrado ninguna junta de pinza, explica por que: lista
+        todas las que llevan 'grasp' en el nombre con su tipo, limites y rango."""
+        m = self.m
+        tipos = {0: "free", 1: "ball", 2: "slide", 3: "hinge"}
+        print(f"\n[pinza {self.lado}] no he podido mapear ninguna articulacion. "
+              f"Juntas con 'grasp' en el nombre que hay en el modelo:")
+        hay = False
+        for j in range(m.njnt):
+            n = nombre(m, mujoco.mjtObj.mjOBJ_JOINT, j)
+            if "grasp" not in n.lower():
+                continue
+            hay = True
+            cuerpo = nombre(m, mujoco.mjtObj.mjOBJ_BODY, int(m.jnt_bodyid[j]))
+            motivo = ""
+            if any(x in n for x in PINZA_EXCLUIR):
+                motivo = "  <- excluida por PINZA_EXCLUIR"
+            elif n in sin_limite:
+                motivo = "  <- SIN limites en el XML: anade su recorrido a PINZA_RECORRIDO"
+            print(f"   {n:32s} cuerpo {cuerpo:28s} {tipos.get(int(m.jnt_type[j]), '?'):5s} "
+                  f"limited={bool(m.jnt_limited[j])} range=[{m.jnt_range[j][0]:+.5f}, "
+                  f"{m.jnt_range[j][1]:+.5f}]{motivo}")
+        if not hay:
+            print("   ninguna: este modelo no tiene pinza articulada")
+        print()
+
+    def mover_pinza(self, apertura, dt):
+        """Lleva la pinza hacia la apertura pedida (0 = cerrada, 1 = abierta)
+        con velocidad limitada, para que no de tirones."""
+        if not self.j_pinza:
+            return
+        objetivo = float(np.clip(apertura, 0.0, 1.0))
+        paso = VEL_PINZA * dt
+        self.apertura += float(np.clip(objetivo - self.apertura, -paso, paso))
+        self.d.qpos[self.qadr_pinza] = (self.q_cerrado
+                                        + self.apertura * (self.q_abierto - self.q_cerrado))
+
     # ---------------- utilidades ----------------
     def _a_local(self, b, p):
         return self.d.xmat[b].reshape(3, 3).T @ (p - self.d.xpos[b])
@@ -180,6 +284,9 @@ class Brazo:
 
     def reposo(self):
         self.d.qpos[self.qadr] = self.q_reposo
+        if self.j_pinza:
+            self.apertura = 1.0
+            self.d.qpos[self.qadr_pinza] = self.q_abierto
 
     def _limitar(self, q):
         q[self.limitado] = np.clip(q[self.limitado], self.lo[self.limitado], self.hi[self.limitado])
@@ -309,23 +416,32 @@ class Brazo:
 
 class RobotTron2:
     def __init__(self, ruta_xml):
+        self.origen = ruta_xml
         self.ruta = quitar_base_flotante(ruta_xml)
         self.m = mujoco.MjModel.from_xml_path(self.ruta)
         self.d = mujoco.MjData(self.m)
-        mujoco.mj_forward(self.m, self.d)
+        mujoco.mj_kinematics(self.m, self.d)
+        mujoco.mj_comPos(self.m, self.d)
         self.brazos = {lado: Brazo(self.m, self.d, lado) for lado in ("L", "R")}
-        mujoco.mj_forward(self.m, self.d)
+        self.actualizar()
         # Orientacion del torso en el mundo (x delante, y izquierda, z arriba)
         self.R_base = self.d.xmat[self.brazos["L"].raiz].reshape(3, 3).copy()
+
+    def actualizar(self):
+        """Recalcula posiciones para dibujar y para la IK. Se evita mj_forward a
+        proposito: ese hace ademas colisiones, restricciones y sensores, que aqui
+        no hacen falta y con las mallas de la pinza cuestan cientos de ms."""
+        mujoco.mj_kinematics(self.m, self.d)
+        mujoco.mj_comPos(self.m, self.d)
 
     def reposo(self):
         for b in self.brazos.values():
             b.reposo()
             b.q_transicion, b.t_atascado = None, 0.0
-        mujoco.mj_forward(self.m, self.d)
+        self.actualizar()
 
     def resumen(self):
-        print(f"\nModelo: {self.ruta}  (nq={self.m.nq}, nu={self.m.nu})")
+        print(f"\nModelo: {self.origen}  (nq={self.m.nq}, nu={self.m.nu})")
         for lado, b in self.brazos.items():
             print(f"\nBrazo {lado}  ->  efector final: {nombre(self.m, mujoco.mjtObj.mjOBJ_BODY, b.ef)}")
             for j, n in zip(b.juntas, b.nombres):
@@ -334,4 +450,9 @@ class RobotTron2:
                 print(f"   {n:30s} {papel:7s} [{lo:+.2f}, {hi:+.2f}] rad")
             print(f"   brazo {b.L_brazo * 100:.1f} cm | antebrazo {b.L_antebrazo * 100:.1f} cm | "
                   f"centro del hombro {np.round(b.hombro, 3)}")
+            if b.j_pinza:
+                for n, c, a in zip(b.n_pinza, b.q_cerrado, b.q_abierto):
+                    print(f"   pinza: {n:28s} cerrada {c:+.2f} -> abierta {a:+.2f}")
+            else:
+                print("   pinza: este modelo no tiene articulaciones de pinza")
         print()

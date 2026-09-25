@@ -1,3 +1,4 @@
+<?xml version='1.0' encoding='UTF-8'?>
 <mujoco model="bipedal_robot">
   <compiler angle="radian" meshdir="../meshes" autolimits="true" texturedir="../../../decoracion" />
   <option timestep="0.001" />
@@ -94,15 +95,15 @@
     <light directional="true" diffuse="0.6 0.6 0.6" specular="0.2 0.2 0.2" pos="0 0 4" dir="0 0 -1" castshadow="false" />
     <geom name="ground" type="plane" pos="0 0 0" size="100 100 0.001" quat="1 0 0 0" material="matplane" condim="3" conaffinity="15" />
     <camera name="track" mode="trackcom" pos="0 -2.3 1.6" xyaxes="1 0 0 0 0.707 0.707" />
-    
+    <!-- base -->
     <body name="base_Link" pos="0.0 0.0 1.21">
       <inertial pos="0.00385 -0.00011 0.11254" quat="0.685641 -0.173048 -0.174878 0.685105" mass="12.57" diaginertia="0.135813 0.118632 0.101515" />
+      <joint type="free" stiffness="1e09" damping="1e08" />
       <geom mesh="base_Link" class="visual_azul" />
       <geom mesh="base_Link" class="collision" group="3" />
-      <geom name="chapa_pecho" class="visual_chapa" size="0.0050 0.0580 0.0175" pos="0.1620 0 0.1500" />
-      <geom name="logo_elecnor_pecho" class="visual_logo" material="mat_elecnor" size="0.0015 0.0520 0.0119" pos="0.1685 0 0.1500" />
+      <geom name="logo_elecnor_pecho" class="visual_logo" material="mat_elecnor" size="0.0015 0.0520 0.0520" pos="0.1685 0 0.1500" />
       <site name="base_imu" pos="0 0 0" />
-      
+      <!-- base 2 Link -->
       <body name="base_2_Link" pos="0.00056 -9e-05 -0.07285">
         <inertial pos="0 0 -0.45862" quat="0.707107 0 0 0.707107" mass="10" diaginertia="0.811937 0.80635 0.017624" />
         <geom mesh="base_2_Link" class="visual_azul_medio" />
@@ -116,7 +117,7 @@
           <geom mesh="base_3_Link" class="collision" group="3" />
         </body>
       </body>
-      
+      <!-- proximal pitch L Link -->
       <body name="proximal_pitch_L_Link" pos="-0.00044 0.09178 0.05474">
         <inertial pos="-0.00547 0.07014 -0.00611" quat="0.749537 0.661877 -0.00992031 0.00384555" mass="2.21" diaginertia="0.00438583 0.0035012 0.00307523" />
         <joint name="proximal_pitch_L_Joint" pos="0 0 0" axis="0 0.996195 -0.0871554" range="-3.14159 2.60054" actuatorfrcrange="-150 150" armature="0.0685894" />
@@ -157,7 +158,7 @@
                       <joint name="grasper_base_L_Joint" pos="0 0 0" axis="0 0 1" range="0.0 1.8326" actuatorfrcrange="-20 20" />
                       <geom mesh="grasper_L_base_Link" class="visual_azul_medio" />
                       <geom mesh="grasper_L_base_Link" class="collision" group="3" />
-                      
+                      <!-- single-DOF linkage: drive(crank_left) is the only actuated joint; fingers close via connect equality -->
                       <body name="grasper_L_crank_left_Link" pos="0 0.0275 -0.0689">
                         <inertial pos="4.7600073e-06 -0.0055481701 -0.019012995" mass="0.0028716751" fullinertia="8.4974068e-07 1.0893102e-06 3.9176962e-07 -8.1619392e-11 -2.8305318e-10 -2.2248284e-07" />
                         <joint name="grasper_L_drive_Joint" pos="0 0 0" axis="1 0 0" range="-0.09522 0.77302" actuatorfrcrange="-2 2" armature="0.0005" />
@@ -211,7 +212,7 @@
           </body>
         </body>
       </body>
-      
+      <!-- proximal pitch R Link -->
       <body name="proximal_pitch_R_Link" pos="-0.00044 -0.09178 0.05474">
         <inertial pos="-0.00547 -0.07014 -0.00611" quat="0.661877 0.749537 -0.00384555 0.00992031" mass="2.21" diaginertia="0.00438583 0.0035012 0.00307523" />
         <joint name="proximal_pitch_R_Joint" pos="0 0 0" axis="0 0.996195 0.0871554" range="-3.14159 2.60054" actuatorfrcrange="-150 150" armature="0.0685894" />
@@ -252,7 +253,7 @@
                       <joint name="grasper_base_R_Joint" pos="0 0 0" axis="0 0 1" range="0.0 1.8326" actuatorfrcrange="-20 20" />
                       <geom mesh="grasper_R_base_Link" class="visual_azul_medio" />
                       <geom mesh="grasper_R_base_Link" class="collision" group="3" />
-                      
+                      <!-- single-DOF linkage: drive(crank_left) is the only actuated joint; fingers close via connect equality -->
                       <body name="grasper_R_crank_left_Link" pos="0 0.0275 -0.0689">
                         <inertial pos="4.7600073e-06 -0.0055481701 -0.019012995" mass="0.0028716751" fullinertia="8.4974068e-07 1.0893102e-06 3.9176962e-07 -8.1619392e-11 -2.8305318e-10 -2.2248284e-07" />
                         <joint name="grasper_R_drive_Joint" pos="0 0 0" axis="1 0 0" range="-0.09522 0.77302" actuatorfrcrange="-2 2" armature="0.0005" />
@@ -306,7 +307,7 @@
           </body>
         </body>
       </body>
-      
+      <!-- head -->
       <body name="head_base_Link" pos="0.04656 9e-05 0.26115">
         <inertial pos="-0.0094 0 0.0033" quat="0.504117 0.504215 -0.495751 0.495847" mass="0.13" diaginertia="0.000246277 0.000150053 9.86e-05" />
         <geom mesh="head_base_Link" class="visual_naranja" />
@@ -323,7 +324,7 @@
           </body>
         </body>
       </body>
-      
+      <!-- camera -->
       <body name="d435_Link" pos="0.0968 0.01759 -0.00409" quat="0.207918 0 0.978146 0">
         <inertial pos="0 0 0" mass="0.001" diaginertia="1e-07 1e-07 1e-07" />
         <body name="d435_optical_frame" pos="0 0 0" quat="0.5 -0.5 0.5 -0.5">
@@ -331,20 +332,20 @@
         </body>
       </body>
     </body>
-    
+    <!-- 左手目标位姿可视化 (使用mocap避免影响物理仿真) -->
     <body name="target_left_body" pos="0.4 0.2 1.29" mocap="true">
-      
+      <!-- 目标位置球体 -->
       <geom name="target_left_origin" type="sphere" size="0.02" rgba="1 0.3 0.8 0.8" contype="0" conaffinity="0" group="4" />
-      
+      <!-- 坐标轴：X=红，Y=绿，Z=蓝 -->
       <geom name="target_left_axis_x" type="cylinder" fromto="0 0 0 0.08 0 0" size="0.006" rgba="1 0 0 0.9" contype="0" conaffinity="0" group="4" />
       <geom name="target_left_axis_y" type="cylinder" fromto="0 0 0 0 0.08 0" size="0.006" rgba="0 1 0 0.9" contype="0" conaffinity="0" group="4" />
       <geom name="target_left_axis_z" type="cylinder" fromto="0 0 0 0 0 0.08" size="0.006" rgba="0 0 1 0.9" contype="0" conaffinity="0" group="4" />
     </body>
-    
+    <!-- 右手目标位姿可视化 (使用mocap避免影响物理仿真) -->
     <body name="target_right_body" pos="0.4 -0.2 1.29" mocap="true">
-      
+      <!-- 目标位置球体 -->
       <geom name="target_right_origin" type="sphere" size="0.02" rgba="1 0.3 0.8 0.8" contype="0" conaffinity="0" group="4" />
-      
+      <!-- 坐标轴：X=红，Y=绿，Z=蓝 -->
       <geom name="target_right_axis_x" type="cylinder" fromto="0 0 0 0.08 0 0" size="0.006" rgba="1 0 0 0.9" contype="0" conaffinity="0" group="4" />
       <geom name="target_right_axis_y" type="cylinder" fromto="0 0 0 0 0.08 0" size="0.006" rgba="0 1 0 0.9" contype="0" conaffinity="0" group="4" />
       <geom name="target_right_axis_z" type="cylinder" fromto="0 0 0 0 0 0.08" size="0.006" rgba="0 0 1 0.9" contype="0" conaffinity="0" group="4" />
@@ -448,14 +449,14 @@
     <exclude body1="grasper_base_R_Link" body2="grasper_R_jaw_right_Link" />
   </contact>
   <equality>
-    
+    <!-- grasper L: closed-loop four-bars + linear couplings -->
     <connect body1="grasper_L_bar_left_Link" body2="grasper_L_jaw_left_Link" anchor="0 -0.01401 -0.048" />
     <connect body1="grasper_L_bar_right_Link" body2="grasper_L_jaw_right_Link" anchor="0 0.01401 -0.048" />
     <joint joint1="grasper_L_crank_right_Joint" joint2="grasper_L_drive_Joint" polycoef="0 1 0 0 0" />
     <joint joint1="grasper_L_nut_Joint" joint2="grasper_L_drive_Joint" polycoef="0 0.02 0 0 0" />
     <joint joint1="grasper_L_jaw_left_Joint" joint2="grasper_L_drive_Joint" polycoef="-3.3776e-07 0.0479991 0.0070779 -0.0083881 0.0001134" />
     <joint joint1="grasper_L_jaw_right_Joint" joint2="grasper_L_drive_Joint" polycoef="-3.3776e-07 0.0479991 0.0070779 -0.0083881 0.0001134" />
-    
+    <!-- grasper R: closed-loop four-bars + linear couplings -->
     <connect body1="grasper_R_bar_left_Link" body2="grasper_R_jaw_left_Link" anchor="0 -0.01401 -0.048" />
     <connect body1="grasper_R_bar_right_Link" body2="grasper_R_jaw_right_Link" anchor="0 0.01401 -0.048" />
     <joint joint1="grasper_R_crank_right_Joint" joint2="grasper_R_drive_Joint" polycoef="0 1 0 0 0" />

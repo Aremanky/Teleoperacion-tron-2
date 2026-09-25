@@ -180,12 +180,12 @@ class SeguidorBrazos:
 
 
 class HiloSeguimiento(threading.Thread):
-    """Lee la camara y ejecuta MediaPipe en segundo plano. El bucle principal pide
-    el ultimo resultado con ultimo() sin tener que esperar."""
+    """Lee la camara y ejecuta MediaPipe (cuerpo y, si se pasa, manos) en segundo
+    plano. El bucle principal pide el ultimo resultado con ultimo() sin esperar."""
 
-    def __init__(self, camara, seguidor):
+    def __init__(self, camara, seguidor, seguidor_manos=None):
         super().__init__(daemon=True)
-        self.camara, self.seguidor = camara, seguidor
+        self.camara, self.seguidor, self.manos = camara, seguidor, seguidor_manos
         self._lock = threading.Lock()
         self._ultimo = None
         self.activo, self.error, self.fps = True, None, 0.0
@@ -199,11 +199,16 @@ class HiloSeguimiento(threading.Thread):
                     self.error = "no llegan imagenes de la camara"
                     return
                 brazos = self.seguidor.procesar(bgr, depth, self.camara.K)
+                aperturas, dibujo_manos = {}, []
+                if self.manos is not None:
+                    aperturas = self.manos.procesar(bgr, self.seguidor.lm2d)
+                    dibujo_manos = self.manos.manos
                 ahora = time.monotonic()
                 self.fps = 0.9 * self.fps + 0.1 / max(ahora - t_ant, 1e-3)
                 t_ant, n = ahora, n + 1
                 with self._lock:
                     self._ultimo = dict(n=n, t=ahora, bgr=bgr, depth=depth, brazos=brazos,
+                                        aperturas=aperturas, manos=dibujo_manos,
                                         lm2d=self.seguidor.lm2d,
                                         linea_hombros=self.seguidor.linea_hombros)
         except Exception as e:  # se informa desde el hilo principal

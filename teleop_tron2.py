@@ -6,6 +6,11 @@ Uso (desde la raiz de tron2-robot-description, con estos 4 .py copiados alli):
   python teleop_tron2.py --solo-mediapipe    # OAK-D sin usar la profundidad
   python teleop_tron2.py --webcam 0          # sin OAK-D, con una webcam normal
   python teleop_tron2.py --modelo lite       # MediaPipe mas rapido (menos preciso)
+  python teleop_tron2.py --sin-manos         # no seguir las manos (va mas rapido)
+
+Las pinzas siguen a las manos: palma abierta abre la pinza, puno cerrado la
+cierra, y las posiciones intermedias se reproducen de forma proporcional.
+Cada mano manda sobre la pinza de su lado (o la contraria en modo espejo).
 
 Teclas (con la ventana de la camara seleccionada):
   q / ESC  salir
@@ -30,6 +35,7 @@ from camaras import CamaraOAK, CamaraWebcam
 from robot_tron2 import RobotTron2
 from seguimiento_brazos import (COLOR_LADO, PUNTOS, VIS_MIN, HiloSeguimiento,
                                 SeguidorBrazos, dibujar_esqueleto)
+from seguimiento_manos import SeguidorManos, dibujar_manos
 
 VENTANA = "Seguimiento OAK-D"
 
@@ -141,6 +147,7 @@ def componer_vista(snap, estado):
     img = snap["bgr"].copy()
     lm2d, brazos, depth = snap["lm2d"], snap["brazos"], snap["depth"]
     dibujar_esqueleto(img, lm2d)
+    dibujar_manos(img, snap.get("manos") or [])
     img = cv2.flip(img, 1)  # vista espejo: tu brazo izquierdo aparece a la izquierda
     h, w = img.shape[:2]
 
@@ -154,12 +161,26 @@ def componer_vista(snap, estado):
             if vis >= VIS_MIN:
                 texto(img, "IZQ" if lado == "L" else "DER", (int(w - 1 - u) + 10, int(v)), COLOR_LADO[lado])
 
+    for k, lado in enumerate(("L", "R")):   # barras de apertura de cada pinza
+        a = estado["pinzas"].get(lado)
+        x0, y0 = 10 + 130 * k, h - 46
+        cv2.rectangle(img, (x0, y0), (x0 + 110, y0 + 14), (0, 0, 0), -1)
+        if a is not None:
+            cv2.rectangle(img, (x0 + 1, y0 + 1), (x0 + 1 + int(108 * a), y0 + 13),
+                          (int(60 * (1 - a)), int(70 + 160 * a), int(235 - 175 * a)), -1)
+        etiqueta = "IZQ" if lado == "L" else "DER"
+        texto(img, f"pinza {etiqueta} {'--' if a is None else f'{a * 100:3.0f}%'}",
+              (x0, y0 - 4), escala=0.42)
+
     lineas = [f"Camara {estado['fps_seg']:4.1f} fps | robot {estado['fps_control']:3.0f} Hz | "
               f"{'PAUSA' if estado['pausado'] else 'TELEOP'} | {'espejo' if estado['espejo'] else 'directo'} | "
               f"{'calibrado' if estado['calibrado'] else 'sin calibrar'}"]
     for lado in ("L", "R"):
         nombre = "IZQ" if lado == "L" else "DER"
-        lineas.append(f"Operador {nombre}: {brazos[lado]['fuente'] if lado in brazos else 'no detectado'}")
+        mano = next((m for m in (snap.get("manos") or []) if m["lado"] == lado), None)
+        extra = f" | mano {mano['apertura'] * 100:3.0f}% (bruto {mano['bruto']:.2f})" if mano else " | mano no vista"
+        lineas.append(f"Operador {nombre}: "
+                      f"{brazos[lado]['fuente'] if lado in brazos else 'no detectado'}{extra}")
     for lado in ("L", "R"):
         if lado in estado["errores"]:
             ec, em = estado["errores"][lado]
@@ -175,22 +196,24 @@ def componer_vista(snap, estado):
 # ---------------------------------------------------------------- bucle principal
 def main():
     ap = argparse.ArgumentParser(description="Teleoperacion de los brazos del TRON 2 con OAK-D")
-    ap.add_argument("--xml", default="tron2a/DACH_TRON2A/xml/robot.xml")
+    ap.add_argument("--xml", default="tron2a/DACH_TRON2A/xml/robot_elecnor.xml")
     ap.add_argument("--webcam", type=int, default=None, help="indice de webcam (en lugar de la OAK-D)")
     ap.add_argument("--solo-mediapipe", action="store_true", help="no usar la profundidad de la OAK-D")
     ap.add_argument("--modelo", default="full", choices=["lite", "full", "heavy"])
+    ap.add_argument("--sin-manos", action="store_true", help="no seguir las manos ni mover las pinzas")
     args = ap.parse_args()
 
     robot = RobotTron2(args.xml)
     robot.resumen()
     seg = SeguidorBrazos(args.modelo, usar_profundidad=not args.solo_mediapipe)
+    manos = None if args.sin_manos else SeguidorManos()
     cam = CamaraWebcam(args.webcam) if args.webcam is not None else CamaraOAK()
-    hilo = HiloSeguimiento(cam, seg)
+    hilo = HiloSeguimiento(cam, seg, manos)
     hilo.start()
 
     R_cam = R_CAM_DEFECTO.copy()
     estado = dict(fps_seg=0.0, fps_control=0.0, pausado=False, espejo=False, calibrado=False,
-                  errores={}, mensaje="")
+                  errores={}, mensaje="", pinzas={})
     suaves = {}           # lado del robot -> objetivos suavizados {codo, muneca, w}
     desde_detras = True
     t_mensaje, n_mostrado = 0.0, -1
@@ -209,7 +232,9 @@ def main():
                     break
 
                 snap = hilo.ultimo()
-                brazos = snap["brazos"] if snap is not None and t0 - snap["t"] < CADUCIDAD else {}
+                fresco = snap is not None and t0 - snap["t"] < CADUCIDAD
+                brazos = snap["brazos"] if fresco else {}
+                aperturas = snap["aperturas"] if fresco else {}
 
                 marcadores = []
                 if not estado["pausado"]:
@@ -225,12 +250,18 @@ def main():
                             s["w"] += a * (w - s["w"])
                         else:
                             suaves[lado_r] = dict(codo=codo, muneca=muneca, w=w)
+                    # las pinzas siguen a las manos; si una mano deja de verse,
+                    # la pinza se queda como estaba
+                    for lado_h, apertura in aperturas.items():
+                        lado_r = OTRO_LADO[lado_h] if estado["espejo"] else lado_h
+                        robot.brazos[lado_r].mover_pinza(apertura, dt)
+                        estado["pinzas"][lado_r] = apertura
                     # los brazos que dejan de verse mantienen su ultimo objetivo
                     for lado_r, s in suaves.items():
                         estado["errores"][lado_r] = robot.brazos[lado_r].seguir(s["codo"], s["muneca"], dt, s["w"])
                         marcadores += [(s["codo"], COLOR_CODO), (s["muneca"], COLOR_MUNECA)]
 
-                mujoco.mj_forward(robot.m, robot.d)
+                robot.actualizar()
                 with v.lock():
                     dibujar_marcadores(v.user_scn, marcadores)
                 v.sync()
@@ -252,6 +283,7 @@ def main():
                     estado["espejo"] = not estado["espejo"]
                     suaves.clear()
                     estado["errores"].clear()
+                    estado["pinzas"].clear()
                 elif tecla == ord("v"):
                     desde_detras = not desde_detras
                     colocar_camara(v, robot, desde_detras)
@@ -259,6 +291,7 @@ def main():
                     robot.reposo()
                     suaves.clear()
                     estado["errores"].clear()
+                    estado["pinzas"].clear()
                 elif tecla == ord("c"):
                     if snap and "L" in snap["brazos"] and "R" in snap["brazos"] and snap["linea_hombros"] is not None:
                         R_cam = calibrar(snap["brazos"], snap["linea_hombros"])
