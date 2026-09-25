@@ -10,10 +10,13 @@ lo que ha detectado para poder revisarlo.
 Tareas de la IK (minimos cuadrados amortiguados, en modo cinematico):
   - llevar el CODO del robot a su objetivo
   - llevar el CENTRO DE LA MUNECA del robot a su objetivo
-  - tirar suavemente de todas las articulaciones hacia la postura de reposo
-    (asi la orientacion de la muneca, que aun no se controla, se queda quieta)
+  - en el espacio nulo: volver a reposo y alejarse de los limites articulares
+Ademas: respeta los limites (bloquea la articulacion y compensan las demas),
+solo acepta pasos que reducen el error, limita la velocidad articular y,
+si el brazo se atasca en un minimo local, busca otra solucion.
 """
 import os
+import time
 import xml.etree.ElementTree as ET
 
 import mujoco
@@ -27,6 +30,12 @@ CANDIDATOS_EF = ["grasper_{lado}_Link", "wrist_roll_{lado}_Link"]
 # Distancia maxima (m) del centro estimado a cada eje para considerar
 # que el hombro / la muneca son esfericos (los tres ejes se cortan)
 TOL_ESFERICO = 0.03
+
+VEL_MAX = 3.0          # rad/s: velocidad maxima de cada articulacion al seguir al operador
+VEL_TRANSICION = 1.5   # rad/s: al cambiar a otra solucion tras un rescate
+MARGEN_LIMITE = 0.1    # rad: junto a un limite se empuja la articulacion hacia dentro
+ERROR_ATASCO = 0.08    # m: error a partir del cual se considera que el brazo esta atascado
+T_ATASCO = 0.5         # s: tiempo atascado antes de buscar otra solucion
 
 
 def nombre(m, tipo, i):
@@ -123,6 +132,9 @@ class Brazo:
         self.L_brazo = float(np.linalg.norm(codo - self.hombro))
         self.L_antebrazo = float(np.linalg.norm(muneca - codo))
         self._jac = np.zeros((3, m.nv))
+        self.q_transicion = None
+        self.t_atascado, self.t_rescate = 0.0, -1e9
+        self.rng = np.random.default_rng(0)
 
     # ---------------- deteccion de la cadena ----------------
     def _buscar_ef(self):
@@ -174,39 +186,125 @@ class Brazo:
         return q
 
     # ---------------- IK ----------------
-    def resolver(self, obj_codo, obj_muneca, iteraciones=8, w_codo=0.6,
-                 lam=0.05, k_reposo=0.01, paso_max=0.2, max_por_llamada=0.3):
-        """Mueve las articulaciones del brazo hacia los objetivos (coordenadas del mundo).
-        La vuelta a reposo se aplica solo en el espacio nulo de las tareas, para
-        no alejar el brazo de los objetivos. max_por_llamada limita cuanto puede
-        girar cada articulacion por frame (rad).
-        Devuelve el error final (m) del codo y de la muneca."""
-        m, d = self.m, self.d
-        q0 = d.qpos[self.qadr].copy()
-        I = np.eye(len(self.juntas))
-        for _ in range(iteraciones):
-            p_c, p_m = self.puntos()
-            mujoco.mj_jac(m, d, self._jac, None, p_c, self.b_codo)
-            J_c = self._jac[:, self.dofs]
-            mujoco.mj_jac(m, d, self._jac, None, p_m, self.b_muneca)
-            J_m = self._jac[:, self.dofs]
+    def _fijar(self, q):
+        self.d.qpos[self.qadr] = q
+        mujoco.mj_kinematics(self.m, self.d)
+        mujoco.mj_comPos(self.m, self.d)  # necesario para mj_jac
 
-            J = np.vstack([w_codo * J_c, J_m])
-            e = np.concatenate([w_codo * (obj_codo - p_c), obj_muneca - p_m])
-            q = d.qpos[self.qadr]
-            # Pseudoinversa amortiguada: J+ = J^T (J J^T + lam^2 I)^-1
-            J_pinv = np.linalg.solve(J @ J.T + lam ** 2 * np.eye(J.shape[0]), J).T
-            dq = J_pinv @ e + (I - J_pinv @ J) @ (k_reposo * (self.q_reposo - q))
+    def error(self, obj_c, obj_m, w_codo):
+        """(error ponderado, error codo, error muneca) en metros."""
+        p_c, p_m = self.puntos()
+        ec, em = np.linalg.norm(obj_c - p_c), np.linalg.norm(obj_m - p_m)
+        return float(np.hypot(w_codo * ec, em)), float(ec), float(em)
+
+    def _paso(self, obj_c, obj_m, w_codo, lam, k_reposo, k_limite):
+        """Un paso de IK que respeta los limites: si una articulacion se saldria de su
+        rango, se bloquea y se recalcula el paso para que las demas compensen."""
+        m, d = self.m, self.d
+        p_c, p_m = self.puntos()
+        mujoco.mj_jac(m, d, self._jac, None, p_c, self.b_codo)
+        J_c = self._jac[:, self.dofs]
+        mujoco.mj_jac(m, d, self._jac, None, p_m, self.b_muneca)
+        J_m = self._jac[:, self.dofs]
+        J = np.vstack([w_codo * J_c, J_m])
+        e = np.concatenate([w_codo * (obj_c - p_c), obj_m - p_m])
+
+        q = d.qpos[self.qadr].copy()
+        n = len(q)
+        # Tarea secundaria (espacio nulo): volver a reposo y alejarse de los limites
+        d_lo, d_hi = q - self.lo, self.hi - q
+        empuje = (np.where(self.limitado & (d_lo < MARGEN_LIMITE), 1 - d_lo / MARGEN_LIMITE, 0.0)
+                  - np.where(self.limitado & (d_hi < MARGEN_LIMITE), 1 - d_hi / MARGEN_LIMITE, 0.0))
+        g = k_reposo * (self.q_reposo - q) + k_limite * empuje
+
+        libres = np.ones(n, dtype=bool)
+        for _ in range(3):
+            Jl = J * libres  # columnas de las articulaciones bloqueadas a cero
+            J_pinv = np.linalg.solve(Jl @ Jl.T + lam ** 2 * np.eye(J.shape[0]), Jl).T
+            dq = J_pinv @ e + (np.eye(n) - J_pinv @ Jl) @ g
+            dq[~libres] = 0.0
+            fuera = self.limitado & libres & (((q + dq) < self.lo) | ((q + dq) > self.hi))
+            if not fuera.any():
+                break
+            libres &= ~fuera
+        return q, dq
+
+    def resolver(self, obj_c, obj_m, w_codo=0.6, iteraciones=4, max_cambio=np.inf,
+                 lam=0.05, k_reposo=0.01, k_limite=0.02, paso_max=0.2):
+        """IK por minimos cuadrados amortiguados con busqueda lineal: solo se aceptan
+        pasos que no empeoran el error, asi el brazo nunca 'da bandazos'.
+        max_cambio: giro maximo de cada articulacion en esta llamada (rad).
+        Devuelve el error final (m) del codo y de la muneca."""
+        q0 = self.d.qpos[self.qadr].copy()
+        err = self.error(obj_c, obj_m, w_codo)[0]
+        for _ in range(iteraciones):
+            q, dq = self._paso(obj_c, obj_m, w_codo, lam, k_reposo, k_limite)
             mayor = np.abs(dq).max()
             if mayor > paso_max:
                 dq *= paso_max / mayor
-            q = self._limitar(q + dq)
-            q = q0 + np.clip(q - q0, -max_por_llamada, max_por_llamada)
-            d.qpos[self.qadr] = q
-            mujoco.mj_kinematics(m, d)
-            mujoco.mj_comPos(m, d)  # necesario para mj_jac
-        p_c, p_m = self.puntos()
-        return float(np.linalg.norm(obj_codo - p_c)), float(np.linalg.norm(obj_muneca - p_m))
+            alfa, aceptado = 1.0, False
+            for _ in range(4):
+                q_n = self._limitar(q + alfa * dq)
+                q_n = q0 + np.clip(q_n - q0, -max_cambio, max_cambio)
+                self._fijar(q_n)
+                err_n = self.error(obj_c, obj_m, w_codo)[0]
+                if err_n <= err + 1e-4:
+                    err, aceptado = err_n, True
+                    break
+                alfa *= 0.5
+            if not aceptado:
+                self._fijar(q)
+                break
+        _, ec, em = self.error(obj_c, obj_m, w_codo)
+        return ec, em
+
+    def seguir(self, obj_c, obj_m, dt, w_codo=0.6):
+        """Llamar en cada ciclo del bucle de control. IK con limite de velocidad y,
+        si el brazo se queda atascado lejos del objetivo (minimo local, limites),
+        busca otra solucion y va hacia ella de forma suave."""
+        ahora = time.monotonic()
+        if self.q_transicion is not None:
+            q = self.d.qpos[self.qadr].copy()
+            falta = self.q_transicion - q
+            if np.abs(falta).max() < 0.02:
+                self.q_transicion = None
+            else:
+                self._fijar(q + np.clip(falta, -VEL_TRANSICION * dt, VEL_TRANSICION * dt))
+                _, ec, em = self.error(obj_c, obj_m, w_codo)
+                return ec, em
+
+        ec, em = self.resolver(obj_c, obj_m, w_codo, max_cambio=VEL_MAX * dt)
+        err = self.error(obj_c, obj_m, w_codo)[0]
+        self.t_atascado = self.t_atascado + dt if err > ERROR_ATASCO else 0.0
+        if self.t_atascado > T_ATASCO and ahora - self.t_rescate > 1.0:
+            self.t_rescate, self.t_atascado = ahora, 0.0
+            q_mejor, err_mejor = self._rescate(obj_c, obj_m, w_codo)
+            if err_mejor < 0.5 * err:
+                self.q_transicion = q_mejor
+        return ec, em
+
+    def _rescate(self, obj_c, obj_m, w_codo):
+        """Prueba varias posturas de partida y devuelve la que mejor alcanza el objetivo."""
+        q_act = self.d.qpos[self.qadr].copy()
+        semillas = [self.q_reposo.copy()]
+        for i in range(len(self.j_hombro)):
+            for delta in (-1.2, 1.2):
+                s = q_act.copy()
+                s[i] += delta
+                semillas.append(s)
+        lo = np.where(self.limitado, self.lo, -np.pi)
+        hi = np.where(self.limitado, self.hi, np.pi)
+        semillas += [self.rng.uniform(lo, hi) for _ in range(3)]
+
+        mejor_q, mejor_err = q_act, np.inf
+        for s in semillas:
+            self._fijar(self._limitar(s))
+            self.resolver(obj_c, obj_m, w_codo, iteraciones=25)
+            err = self.error(obj_c, obj_m, w_codo)[0]
+            if err < mejor_err:
+                mejor_q, mejor_err = self.d.qpos[self.qadr].copy(), err
+        self._fijar(q_act)
+        return mejor_q, mejor_err
 
 
 class RobotTron2:
@@ -223,6 +321,7 @@ class RobotTron2:
     def reposo(self):
         for b in self.brazos.values():
             b.reposo()
+            b.q_transicion, b.t_atascado = None, 0.0
         mujoco.mj_forward(self.m, self.d)
 
     def resumen(self):

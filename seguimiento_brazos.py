@@ -7,11 +7,17 @@ antebrazo (codo->muneca) en el marco de la camara (x derecha, y abajo,
 z hacia delante). Solo se usan direcciones, asi que no importa que el
 operador sea mas alto o mas bajo que el robot.
 
-Fuente de los puntos 3D, por orden de preferencia:
-  "profundidad": pixel de MediaPipe + profundidad alineada de la OAK-D
-  "mediapipe3d": coordenadas 3D estimadas por el propio MediaPipe
+Fuente de los puntos 3D (se muestra en la ventana):
+  "profundidad": pixel de MediaPipe + profundidad de la OAK-D en los 3 puntos
+  "mixta":       profundidad en el hombro; en codo/muneca, donde la OAK-D no da
+                 un valor coherente, se usa la profundidad relativa de MediaPipe
+  "mediapipe3d": solo coordenadas 3D de MediaPipe (sin OAK-D o sin dato en el hombro)
+
+HiloSeguimiento ejecuta camara + MediaPipe en segundo plano para que el bucle
+del robot vaya a su ritmo aunque el seguimiento sea mas lento.
 """
 import os
+import threading
 import time
 import urllib.request
 
@@ -31,8 +37,10 @@ COLOR_LADO = {"L": (255, 170, 0), "R": (0, 140, 255)}  # BGR: azul (izq), naranj
 VIS_MIN = 0.5                     # visibilidad minima de un landmark
 RANGO_BRAZO = (0.15, 0.50)        # m, longitudes plausibles para aceptar
 RANGO_ANTEBRAZO = (0.12, 0.45)    # la lectura de profundidad
-FILTRO_MIN_CUTOFF = 1.2           # Hz: mas bajo = menos temblor en reposo
-FILTRO_BETA = 1.0                 # mas alto = menos retraso en movimientos rapidos
+TOL_Z = 0.20                      # m: diferencia maxima entre la profundidad de la OAK-D
+                                  #    y la que predice MediaPipe para fiarse de la OAK-D
+FILTRO_MIN_CUTOFF = 0.8           # Hz: mas bajo = menos temblor en reposo
+FILTRO_BETA = 0.7                 # mas alto = menos retraso en movimientos rapidos
 
 
 class FiltroOneEuro:
@@ -128,9 +136,8 @@ class SeguidorBrazos:
             if min(vis(lm[i]) for i in idx) < VIS_MIN:
                 continue
             pts, fuente = None, None
-            if self.usar_profundidad and depth is not None and K is not None:
-                pts = self._puntos_con_profundidad(lm, idx, depth, K, w, h)
-                fuente = "profundidad"
+            if self.usar_profundidad and depth is not None and K is not None and mundo is not None:
+                pts, fuente = self._puntos_fusion(lm, mundo, idx, depth, K, w, h)
             if pts is None and mundo is not None:
                 pts = [np.array([mundo[i].x, mundo[i].y, mundo[i].z]) for i in idx]
                 fuente = "mediapipe3d"
@@ -145,19 +152,70 @@ class SeguidorBrazos:
                             "fuente": fuente}
         return brazos
 
-    def _puntos_con_profundidad(self, lm, idx, depth, K, w, h):
+    def _puntos_fusion(self, lm, mundo, idx, depth, K, w, h):
+        """Pixel (u, v) de MediaPipe + profundidad. El hombro (sobre el torso) da la
+        profundidad de referencia. En codo y muneca se usa la de la OAK-D si es
+        coherente con la que predice MediaPipe; si no, la prediccion. Asi un pixel
+        sin dato no hace saltar de fuente a todo el brazo."""
         fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
-        pts = []
-        for i in idx:
-            u, v = lm[i].x * w, lm[i].y * h
-            z = profundidad_en(depth, u, v)
-            if z is None:
-                return None
+        uv = [(lm[i].x * w, lm[i].y * h) for i in idx]
+        z_hombro = profundidad_en(depth, *uv[0])
+        if z_hombro is None:
+            return None, None
+        pts, n_oak = [], 0
+        for k, (i, (u, v)) in enumerate(zip(idx, uv)):
+            z = z_hombro
+            if k > 0:
+                z_pred = z_hombro + (mundo[i].z - mundo[idx[0]].z)
+                z_oak = profundidad_en(depth, u, v)
+                if z_oak is not None and abs(z_oak - z_pred) < TOL_Z:
+                    z, n_oak = z_oak, n_oak + 1
+                else:
+                    z = z_pred
             pts.append(np.array([(u - cx) * z / fx, (v - cy) * z / fy, z]))
         l_b, l_a = np.linalg.norm(pts[1] - pts[0]), np.linalg.norm(pts[2] - pts[1])
         if not (RANGO_BRAZO[0] < l_b < RANGO_BRAZO[1] and RANGO_ANTEBRAZO[0] < l_a < RANGO_ANTEBRAZO[1]):
-            return None  # lectura de profundidad poco creible -> se usa MediaPipe 3D
-        return pts
+            return None, None
+        return pts, ("profundidad" if n_oak == 2 else "mixta")
+
+
+class HiloSeguimiento(threading.Thread):
+    """Lee la camara y ejecuta MediaPipe en segundo plano. El bucle principal pide
+    el ultimo resultado con ultimo() sin tener que esperar."""
+
+    def __init__(self, camara, seguidor):
+        super().__init__(daemon=True)
+        self.camara, self.seguidor = camara, seguidor
+        self._lock = threading.Lock()
+        self._ultimo = None
+        self.activo, self.error, self.fps = True, None, 0.0
+
+    def run(self):
+        t_ant, n = time.monotonic(), 0
+        try:
+            while self.activo:
+                bgr, depth = self.camara.leer()
+                if bgr is None:
+                    self.error = "no llegan imagenes de la camara"
+                    return
+                brazos = self.seguidor.procesar(bgr, depth, self.camara.K)
+                ahora = time.monotonic()
+                self.fps = 0.9 * self.fps + 0.1 / max(ahora - t_ant, 1e-3)
+                t_ant, n = ahora, n + 1
+                with self._lock:
+                    self._ultimo = dict(n=n, t=ahora, bgr=bgr, depth=depth, brazos=brazos,
+                                        lm2d=self.seguidor.lm2d,
+                                        linea_hombros=self.seguidor.linea_hombros)
+        except Exception as e:  # se informa desde el hilo principal
+            self.error = repr(e)
+
+    def ultimo(self):
+        with self._lock:
+            return self._ultimo
+
+    def parar(self):
+        self.activo = False
+        self.join(timeout=2.0)
 
 
 def dibujar_esqueleto(img, lm2d):
