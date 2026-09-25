@@ -99,8 +99,7 @@
       <inertial pos="0.00385 -0.00011 0.11254" quat="0.685641 -0.173048 -0.174878 0.685105" mass="12.57" diaginertia="0.135813 0.118632 0.101515" />
       <geom mesh="base_Link" class="visual_azul" />
       <geom mesh="base_Link" class="collision" group="3" />
-      <geom name="chapa_pecho" class="visual_chapa" size="0.0050 0.0580 0.0175" pos="0.1620 0 0.1500" />
-      <geom name="logo_elecnor_pecho" class="visual_logo" material="mat_elecnor" size="0.0015 0.0520 0.0119" pos="0.1685 0 0.1500" />
+      <geom name="logo_elecnor_pecho" class="visual_logo" material="mat_elecnor" size="0.0015 0.0520 0.0520" pos="0.1685 0 0.1500" />
       <site name="base_imu" pos="0 0 0" />
       
       <body name="base_2_Link" pos="0.00056 -9e-05 -0.07285">
