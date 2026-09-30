@@ -8,6 +8,7 @@ Uso (desde la raiz de tron2-robot-description, con estos 4 .py copiados alli):
   python teleop_tron2.py --modelo lite       # MediaPipe mas rapido (menos preciso)
   python teleop_tron2.py --sin-manos         # no seguir las manos (va mas rapido)
   python teleop_tron2.py --sin-giro          # manos solo para abrir/cerrar, sin girar la muneca
+  python teleop_tron2.py --escenario tuberias  # arranca ya con el escenario de tuberias a la vista
 
 Las pinzas siguen a las manos: palma abierta abre la pinza, puno cerrado la
 cierra, y las posiciones intermedias se reproducen de forma proporcional.
@@ -24,6 +25,7 @@ Teclas (con la ventana de la camara seleccionada):
   o        recentrar el giro de las munecas (la postura actual de tu mano pasa a ser la neutra)
   v        ver el robot desde detras / desde delante
   r        devolver los brazos a la postura de reposo
+  1        escenario de tuberias: la primera vez lo hace aparecer; despues lo reinicia
 
 Estructura: un hilo lee la camara y ejecuta MediaPipe (a lo que de el PC, ~12-25 fps)
 y el bucle principal mueve el robot a 60 Hz, suavizando los objetivos entre frames.
@@ -37,6 +39,7 @@ import mujoco.viewer
 import numpy as np
 
 from camaras import CamaraOAK, CamaraWebcam
+import escenario_tuberias
 from robot_tron2 import RobotTron2, angulo_giro, ortonormalizar
 from seguimiento_brazos import (COLOR_LADO, PUNTOS, VIS_MIN, HiloSeguimiento,
                                 SeguidorBrazos, dibujar_esqueleto)
@@ -204,11 +207,13 @@ def componer_vista(snap, estado):
             giro = estado["giros"].get(lado)
             lineas.append(f"Robot {lado}: error codo {ec * 1000:3.0f} mm | muneca {em * 1000:3.0f} mm"
                           + (f" | giro muneca {np.degrees(giro):+4.0f} deg" if giro is not None else ""))
+    if estado.get("escena"):
+        lineas.append(estado["escena"])
     if estado["mensaje"]:
         lineas.append(estado["mensaje"])
     for k, s in enumerate(lineas):
         texto(img, s, (10, 22 + 22 * k))
-    texto(img, "q salir | p pausa | c calibrar | o recentrar giro | m espejo | v vista | r reposo",
+    texto(img, "q salir | p pausa | c calibrar | o recentrar giro | m espejo | v vista | r reposo | 1 tuberias",
           (10, h - 12), escala=0.42)
     return img
 
@@ -222,9 +227,13 @@ def main():
     ap.add_argument("--modelo", default="full", choices=["lite", "full", "heavy"])
     ap.add_argument("--sin-manos", action="store_true", help="no seguir las manos ni mover las pinzas")
     ap.add_argument("--sin-giro", action="store_true", help="no orientar la pinza con la mano")
+    ap.add_argument("--escenario", choices=["tuberias"], default=None,
+                    help="anade un escenario de trabajo alrededor del robot")
     args = ap.parse_args()
 
-    robot = RobotTron2(args.xml)
+    # El escenario de tuberias siempre se carga, pero oculto; la tecla 1 lo muestra.
+    robot = RobotTron2(args.xml, escenario_tuberias.anadir_al_modelo)
+    escena = escenario_tuberias.EscenarioTuberias(robot)
     robot.resumen()
     seg = SeguidorBrazos(args.modelo, usar_profundidad=not args.solo_mediapipe)
     manos = None if args.sin_manos else SeguidorManos()
@@ -245,6 +254,10 @@ def main():
     try:
         with mujoco.viewer.launch_passive(robot.m, robot.d, show_left_ui=False, show_right_ui=False) as v:
             colocar_camara(v, robot, desde_detras)
+            with v.lock():
+                v.opt.geomgroup[escenario_tuberias.GRUPO_ESCENARIO] = 0
+            if args.escenario == "tuberias":
+                escena.activar(v)
             t_ant = time.monotonic()
             while v.is_running():
                 t0 = time.monotonic()
@@ -279,7 +292,8 @@ def main():
                     for lado_h, mano in aperturas.items():
                         lado_r = OTRO_LADO[lado_h] if estado["espejo"] else lado_h
                         brazo = robot.brazos[lado_r]
-                        brazo.mover_pinza(mano["apertura"], dt)
+                        minimo = escena.apertura_minima(lado_r) if escena else 0.0
+                        brazo.mover_pinza(max(mano["apertura"], minimo), dt)
                         estado["pinzas"][lado_r] = mano["apertura"]
                         if not girar:
                             continue
@@ -301,6 +315,9 @@ def main():
                         marcadores += [(s["codo"], COLOR_CODO), (s["muneca"], COLOR_MUNECA)]
 
                 robot.actualizar()
+                if escena is not None:          # la pieza sigue a la pinza, encaja o cae
+                    escena.actualizar(robot, estado["pinzas"], dt)
+                    robot.actualizar()
                 with v.lock():
                     dibujar_marcadores(v.user_scn, marcadores)
                 v.sync()
@@ -312,6 +329,8 @@ def main():
                 if snap is not None and snap["n"] != n_mostrado:  # solo si hay imagen nueva
                     n_mostrado = snap["n"]
                     estado["fps_seg"] = hilo.fps
+                    estado["escena"] = escena.texto() if escena else ""
+
                     cv2.imshow(VENTANA, componer_vista(snap, estado))
 
                 tecla = cv2.waitKey(1) & 0xFF
@@ -328,6 +347,11 @@ def main():
                 elif tecla == ord("o"):
                     giros.clear()
                     estado["mensaje"] = "Giro de munecas recentrado"
+                    t_mensaje = t0 + 2.0
+                elif tecla == ord("1"):
+                    estado["mensaje"] = ("Escenario de tuberias reiniciado" if escena.activa
+                                         else "Escenario de tuberias")
+                    escena.activar(v)
                     t_mensaje = t0 + 2.0
                 elif tecla == ord("v"):
                     desde_detras = not desde_detras

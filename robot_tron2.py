@@ -85,8 +85,9 @@ def nombre(m, tipo, i):
     return mujoco.mj_id2name(m, tipo, i) or f"<{i}>"
 
 
-def quitar_base_flotante(ruta_xml):
-    """Crea robot_fixed.xml junto al original, sin free joint (torso fijo al mundo)."""
+def quitar_base_flotante(ruta_xml, extra=None):
+    """Crea robot_fixed.xml junto al original, sin free joint (torso fijo al mundo).
+    'extra(root)', si se pasa, puede anadir un escenario al modelo antes de guardarlo."""
     tree = ET.parse(ruta_xml)
     root = tree.getroot()
     quitados = 0
@@ -101,6 +102,8 @@ def quitar_base_flotante(ruta_xml):
                 key.set("qpos", " ".join(key.get("qpos").split()[7:]))
             if key.get("qvel"):
                 key.set("qvel", " ".join(key.get("qvel").split()[6:]))
+    if extra is not None:
+        extra(root)
     # Se guarda junto al original para que las rutas de mallas/includes sigan valiendo
     ruta_fija = os.path.join(os.path.dirname(os.path.abspath(ruta_xml)), "robot_fixed.xml")
     tree.write(ruta_fija)
@@ -151,6 +154,7 @@ class Brazo:
         self.q_reposo = np.where(self.limitado, np.clip(0.0, self.lo, self.hi), 0.0)
 
         self._preparar_pinza()
+        self._preparar_agarre()
 
         # --- Geometria del brazo, medida en la postura de reposo ---
         self.reposo()
@@ -245,6 +249,7 @@ class Brazo:
                     descendientes.add(b)
                     break
                 p = int(m.body_parentid[p])
+        self.cuerpos_pinza = descendientes
         juntas, sin_limite = [], []
         for j in range(m.njnt):
             if m.jnt_type[j] not in (HINGE, int(mujoco.mjtJoint.mjJNT_SLIDE)):
@@ -336,6 +341,26 @@ class Brazo:
     def _limitar(self, q):
         q[self.limitado] = np.clip(q[self.limitado], self.lo[self.limitado], self.hi[self.limitado])
         return q
+
+    # ---------------- punto de agarre ----------------
+    def _preparar_agarre(self):
+        """Geoms de las mordazas: el punto de agarre es el centro entre ellas.
+        (MuJoCo centra cada malla en su centro de masas, asi que la posicion de
+        cada geom de mordaza cae en mitad del dedo.) Si el modelo no tiene
+        mordazas articuladas se usan los geoms de la pinza entera."""
+        m = self.m
+        def geoms_de(cuerpos):
+            return [g for b in cuerpos for g in range(m.body_geomadr[b], m.body_geomadr[b] + m.body_geomnum[b])
+                    if m.body_geomnum[b] > 0]
+        cuerpos = getattr(self, "cuerpos_pinza", set())
+        mordazas = [b for b in cuerpos if "jaw" in nombre(m, mujoco.mjtObj.mjOBJ_BODY, b)]
+        self.geoms_agarre = geoms_de(mordazas) or geoms_de(cuerpos)
+
+    def punto_agarre(self):
+        """Punto (mundo) entre las mordazas de la pinza."""
+        if self.geoms_agarre:
+            return self.d.geom_xpos[self.geoms_agarre].mean(axis=0)
+        return self.d.xpos[self.ef].copy()
 
     # ---------------- giro de la muneca ----------------
     def eje_giro(self):
@@ -497,9 +522,9 @@ class Brazo:
 
 
 class RobotTron2:
-    def __init__(self, ruta_xml):
+    def __init__(self, ruta_xml, escenario=None):
         self.origen = ruta_xml
-        self.ruta = quitar_base_flotante(ruta_xml)
+        self.ruta = quitar_base_flotante(ruta_xml, escenario)
         self.m = mujoco.MjModel.from_xml_path(self.ruta)
         self.d = mujoco.MjData(self.m)
         mujoco.mj_kinematics(self.m, self.d)
