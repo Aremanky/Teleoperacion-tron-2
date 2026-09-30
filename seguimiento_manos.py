@@ -1,8 +1,9 @@
 """
 Deteccion de mano abierta / puno cerrado con MediaPipe Hand Landmarker (API Tasks).
 
-Para cada mano devuelve una APERTURA continua de 0 (puño) a 1 (palma abierta),
-mas el pixel de la muneca, que sirve para emparejar cada mano con su brazo.
+Para cada mano devuelve una APERTURA continua de 0 (puno) a 1 (palma abierta),
+la ORIENTACION de la mano como matriz 3x3 en el marco de la camara, y el pixel
+de la muneca, que sirve para emparejar cada mano con su brazo.
 
 Como se mide: con los puntos 3D metricos de la mano (hand_world_landmarks) se
 calcula, para indice, corazon, anular y menique, la distancia de la punta a su
@@ -23,6 +24,7 @@ URL_MODELO = ("https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
               "hand_landmarker/float16/latest/hand_landmarker.task")
 
 MUNECA = 0
+NUDILLO_INDICE, NUDILLO_MENIQUE = 5, 17
 PALMA = (0, 9)                  # muneca -> nudillo del corazon: escala de la mano
 DEDOS = ((5, 8), (9, 12), (13, 16), (17, 20))   # (nudillo, punta)
 
@@ -93,6 +95,29 @@ class SeguidorManos:
         return float(np.mean([np.linalg.norm(p[t] - p[n]) for n, t in DEDOS]) / palma)
 
     @staticmethod
+    def marco(mundo):
+        """Orientacion de la mano como matriz 3x3 (columnas = ejes de la mano
+        expresados en el marco de la camara):
+           columna 0: hacia los dedos (muneca -> nudillo del corazon)
+           columna 1: a lo ancho de la palma (indice -> menique)
+           columna 2: normal de la palma
+        Los hand_world_landmarks vienen ya orientados como la imagen, asi que
+        esta matriz esta en el mismo marco que las direcciones de los brazos."""
+        p = np.array([[l.x, l.y, l.z] for l in mundo])
+        f = p[PALMA[1]] - p[PALMA[0]]
+        a = p[NUDILLO_MENIQUE] - p[NUDILLO_INDICE]
+        nf = np.linalg.norm(f)
+        if nf < 1e-5:
+            return None
+        f = f / nf
+        a = a - f * np.dot(a, f)          # ortogonaliza respecto a los dedos
+        na = np.linalg.norm(a)
+        if na < 1e-5:
+            return None
+        a = a / na
+        return np.column_stack([f, a, np.cross(f, a)])
+
+    @staticmethod
     def a_apertura(razon):
         a = (razon - RAZON_CERRADA) / (RAZON_ABIERTA - RAZON_CERRADA)
         a = float(np.clip(a, 0.0, 1.0))
@@ -104,7 +129,7 @@ class SeguidorManos:
 
     # ---------------------------------------------------------------- ciclo
     def procesar(self, bgr, lm2d_pose):
-        """Devuelve {"L": apertura, "R": apertura} en lados del OPERADOR.
+        """Devuelve {"L": {"apertura": .., "marco": R}, ...} en lados del OPERADOR.
         Cada mano se asigna al brazo cuya muneca de pose le queda mas cerca en la
         imagen, que es mas fiable que la etiqueta izquierda/derecha de MediaPipe."""
         h, w = bgr.shape[:2]
@@ -114,9 +139,8 @@ class SeguidorManos:
             mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), self.t_ms)
 
         self.manos = []
-        aperturas = {}
         if not res.hand_landmarks or not res.hand_world_landmarks:
-            return aperturas
+            return {}
 
         t = time.monotonic()
         # munecas del cuerpo: 15 = izquierda del operador, 16 = derecha
@@ -129,7 +153,8 @@ class SeguidorManos:
         candidatos = []
         for lm, mundo in zip(res.hand_landmarks, res.hand_world_landmarks):
             razon = self.razon_apertura(mundo)
-            if razon is None:
+            R = self.marco(mundo)
+            if razon is None or R is None:
                 continue
             px = np.array([[l.x * w, l.y * h] for l in lm])
             lado, dist = None, np.inf
@@ -139,15 +164,17 @@ class SeguidorManos:
                     lado, dist = s, d
             if lado is None or dist > DIST_MAX_MUNECA * w:
                 continue
-            candidatos.append((dist, lado, razon, px))
+            candidatos.append((dist, lado, razon, px, R))
 
-        for dist, lado, razon, px in sorted(candidatos):   # la mas cercana se queda el lado
-            if lado in aperturas:
+        datos = {}
+        for dist, lado, razon, px, R in sorted(candidatos, key=lambda c: c[0]):
+            if lado in datos:
                 continue
-            aperturas[lado] = self.filtros[lado](self.a_apertura(razon), t)
-            self.manos.append({"lado": lado, "apertura": aperturas[lado],
+            apertura = self.filtros[lado](self.a_apertura(razon), t)
+            datos[lado] = {"apertura": apertura, "marco": R}
+            self.manos.append({"lado": lado, "apertura": apertura,
                                "bruto": razon, "puntos_px": px})
-        return aperturas
+        return datos
 
 
 def dibujar_manos(img, manos):

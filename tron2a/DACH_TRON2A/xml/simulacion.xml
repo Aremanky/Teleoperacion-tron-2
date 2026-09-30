@@ -1,0 +1,47 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<mujoco model="escena_tuberias_elecnor">
+    
+    <!-- 1. INCLUIMOS TU ROBOT -->
+    <!-- Esto cargará todas las mallas, materiales, el suelo y la física de tu archivo -->
+    <include file="robot_elecnor.xml" />
+
+    <!-- 2. DEFINIMOS EL ENTORNO -->
+    <worldbody>
+        
+        <!-- TECHO -->
+        <!-- Lo colocamos a 2.5 metros de altura para que no interfiera con la cabeza del robot (z=~1.5m) -->
+        <body name="techo_estacion" pos="0 0 2.5">
+            <geom type="box" size="2 2 0.05" rgba="0.7 0.7 0.7 1" />
+        </body>
+
+        <!-- TUBO FIJADO AL TECHO CON UNIÓN -->
+        <!-- Lo colocamos enfrente del robot (x=0.5) -->
+        <body name="ensamblaje_techo" pos="0.5 0 2.45">
+            <!-- Tubo que cuelga -->
+            <geom name="tubo_techo" type="cylinder" size="0.03 0.25" pos="0 0 -0.25" rgba="0.6 0.6 0.62 1" />
+            
+            <!-- Unión (Codo/conector) al final del tubo -->
+            <geom name="union_techo" type="sphere" size="0.04" pos="0 0 -0.5" rgba="0.3 0.3 0.35 1" />
+            
+            <!-- Tramo corto que sale de la unión (horizontal) -->
+            <!-- Usamos cuaterniones (quat) para rotar el cilindro 90 grados y que quede paralelo al suelo -->
+            <geom name="tubo_techo_horizontal" type="cylinder" size="0.03 0.15" pos="0.15 0 -0.5" quat="0.707107 0 0.707107 0" rgba="0.6 0.6 0.62 1" />
+        </body>
+
+        <!-- TUBO SUELTO EN EL SUELO (OBJETIVO PARA RECOGER) -->
+        <!-- Posicionado cerca del objetivo izquierdo (target_left_body) definido en tu XML -->
+        <body name="tubo_recogible" pos="0.4 0.2 0.02">
+            <!-- IMPORTANTE: freejoint convierte este cuerpo en un objeto dinámico que puede caer, rodar y ser agarrado -->
+            <freejoint/>
+            
+            <!-- 
+              size="0.02 0.15" -> Radio de 2 cm (cabe en el grasper), longitud total de 30 cm.
+              quat="0.707107 0 0.707107 0" -> Lo acuesta en el suelo.
+              mass="0.3" -> Peso ligero de 300 gramos (similar a un tubo de PVC real).
+              friction="1.2 0.5 0.5" -> Alta fricción para que la pinza metálica no resbale al agarrarlo.
+            -->
+            <geom name="geom_tubo_recogible" type="cylinder" size="0.02 0.15" quat="0.707107 0 0.707107 0" rgba="0.941 0.494 0.149 1" mass="0.3" friction="1.2 0.5 0.5"/>
+        </body>
+
+    </worldbody>
+</mujoco>c  

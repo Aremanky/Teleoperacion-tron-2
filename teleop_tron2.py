@@ -7,9 +7,13 @@ Uso (desde la raiz de tron2-robot-description, con estos 4 .py copiados alli):
   python teleop_tron2.py --webcam 0          # sin OAK-D, con una webcam normal
   python teleop_tron2.py --modelo lite       # MediaPipe mas rapido (menos preciso)
   python teleop_tron2.py --sin-manos         # no seguir las manos (va mas rapido)
+  python teleop_tron2.py --sin-giro          # manos solo para abrir/cerrar, sin girar la muneca
 
 Las pinzas siguen a las manos: palma abierta abre la pinza, puno cerrado la
 cierra, y las posiciones intermedias se reproducen de forma proporcional.
+Ademas, al girar la mano sobre el eje del antebrazo (como al girar un pomo)
+gira la pinza. Doblar la muneca arriba/abajo o de lado NO se copia: la muneca
+del robot se queda recta y solo gira, que es mas facil de manejar.
 Cada mano manda sobre la pinza de su lado (o la contraria en modo espejo).
 
 Teclas (con la ventana de la camara seleccionada):
@@ -17,6 +21,7 @@ Teclas (con la ventana de la camara seleccionada):
   p        pausar / reanudar (embrague: congela el robot mientras te recolocas)
   c        calibrar: de pie, mirando a la camara, brazos relajados hacia abajo
   m        modo espejo on/off (tu brazo izquierdo mueve el derecho del robot)
+  o        recentrar el giro de las munecas (la postura actual de tu mano pasa a ser la neutra)
   v        ver el robot desde detras / desde delante
   r        devolver los brazos a la postura de reposo
 
@@ -32,7 +37,7 @@ import mujoco.viewer
 import numpy as np
 
 from camaras import CamaraOAK, CamaraWebcam
-from robot_tron2 import RobotTron2
+from robot_tron2 import RobotTron2, angulo_giro, ortonormalizar
 from seguimiento_brazos import (COLOR_LADO, PUNTOS, VIS_MIN, HiloSeguimiento,
                                 SeguidorBrazos, dibujar_esqueleto)
 from seguimiento_manos import SeguidorManos, dibujar_manos
@@ -50,6 +55,8 @@ TAU_OBJETIVO = 0.06        # s: suavizado de los objetivos entre frames de la ca
 CADUCIDAD = 0.5            # s: si no hay datos nuevos en este tiempo, el robot se queda quieto
 W_CODO = 0.6               # peso del objetivo del codo frente al de la muneca
 ANG_RECTO = (10.0, 30.0)   # grados: con el brazo casi recto se ignora el codo (evita giros locos)
+TAU_GIRO = 0.12            # s: suavizado de la orientacion (mas alto = mas suave, mas retraso)
+ESPEJO_M = np.diag([1.0, -1.0, 1.0])   # reflexion izquierda-derecha en el marco del robot
 ZONA_MUERTA_CODO = (5.0, 25.0)  # grados: flexiones menores se tratan como brazo recto (se atenuan)
 
 COLOR_CODO = [1.0, 0.85, 0.0, 0.8]    # marcador amarillo en MuJoCo
@@ -95,6 +102,16 @@ def objetivos(robot, lado_robot, datos, R_cam, espejo):
     codo = brazo.hombro + brazo.L_brazo * d_b
     muneca = codo + brazo.L_antebrazo * d_a
     return codo, muneca
+
+
+def marco_mano(robot, datos, R_cam, espejo):
+    """Orientacion de la mano del operador llevada al marco del robot.
+    En modo espejo se refleja en el plano de simetria y se le devuelve la
+    orientacion correcta invirtiendo tambien el eje transversal de la palma."""
+    R = robot.R_base @ R_cam @ datos["marco"]
+    if espejo:
+        R = ESPEJO_M @ R @ np.diag([1.0, -1.0, 1.0])
+    return ortonormalizar(R)
 
 
 def peso_codo(datos):
@@ -183,13 +200,16 @@ def componer_vista(snap, estado):
                       f"{brazos[lado]['fuente'] if lado in brazos else 'no detectado'}{extra}")
     for lado in ("L", "R"):
         if lado in estado["errores"]:
-            ec, em = estado["errores"][lado]
-            lineas.append(f"Robot {lado}: error codo {ec * 1000:3.0f} mm | muneca {em * 1000:3.0f} mm")
+            ec, em, _ = estado["errores"][lado]
+            giro = estado["giros"].get(lado)
+            lineas.append(f"Robot {lado}: error codo {ec * 1000:3.0f} mm | muneca {em * 1000:3.0f} mm"
+                          + (f" | giro muneca {np.degrees(giro):+4.0f} deg" if giro is not None else ""))
     if estado["mensaje"]:
         lineas.append(estado["mensaje"])
     for k, s in enumerate(lineas):
         texto(img, s, (10, 22 + 22 * k))
-    texto(img, "q salir | p pausa | c calibrar | m espejo | v vista | r reposo", (10, h - 12), escala=0.45)
+    texto(img, "q salir | p pausa | c calibrar | o recentrar giro | m espejo | v vista | r reposo",
+          (10, h - 12), escala=0.42)
     return img
 
 
@@ -201,20 +221,23 @@ def main():
     ap.add_argument("--solo-mediapipe", action="store_true", help="no usar la profundidad de la OAK-D")
     ap.add_argument("--modelo", default="full", choices=["lite", "full", "heavy"])
     ap.add_argument("--sin-manos", action="store_true", help="no seguir las manos ni mover las pinzas")
+    ap.add_argument("--sin-giro", action="store_true", help="no orientar la pinza con la mano")
     args = ap.parse_args()
 
     robot = RobotTron2(args.xml)
     robot.resumen()
     seg = SeguidorBrazos(args.modelo, usar_profundidad=not args.solo_mediapipe)
     manos = None if args.sin_manos else SeguidorManos()
+    girar = not (args.sin_manos or args.sin_giro)
     cam = CamaraWebcam(args.webcam) if args.webcam is not None else CamaraOAK()
     hilo = HiloSeguimiento(cam, seg, manos)
     hilo.start()
 
     R_cam = R_CAM_DEFECTO.copy()
     estado = dict(fps_seg=0.0, fps_control=0.0, pausado=False, espejo=False, calibrado=False,
-                  errores={}, mensaje="", pinzas={})
-    suaves = {}           # lado del robot -> objetivos suavizados {codo, muneca, w}
+                  errores={}, mensaje="", pinzas={}, giros={})
+    suaves = {}           # lado del robot -> objetivos suavizados {codo, muneca, w, R}
+    giros = {}            # lado del robot -> {"A0": mano neutra, "q0": giro neutro, "obj": objetivo}
     desde_detras = True
     t_mensaje, n_mostrado = 0.0, -1
     cv2.namedWindow(VENTANA, cv2.WINDOW_NORMAL)
@@ -252,13 +275,29 @@ def main():
                             suaves[lado_r] = dict(codo=codo, muneca=muneca, w=w)
                     # las pinzas siguen a las manos; si una mano deja de verse,
                     # la pinza se queda como estaba
-                    for lado_h, apertura in aperturas.items():
+                    a_g = 1.0 - np.exp(-dt / TAU_GIRO)
+                    for lado_h, mano in aperturas.items():
                         lado_r = OTRO_LADO[lado_h] if estado["espejo"] else lado_h
-                        robot.brazos[lado_r].mover_pinza(apertura, dt)
-                        estado["pinzas"][lado_r] = apertura
+                        brazo = robot.brazos[lado_r]
+                        brazo.mover_pinza(mano["apertura"], dt)
+                        estado["pinzas"][lado_r] = mano["apertura"]
+                        if not girar:
+                            continue
+                        A = marco_mano(robot, mano, R_cam, estado["espejo"])
+                        g = giros.get(lado_r)
+                        if g is None:   # al ver la mano por primera vez no hay salto:
+                            # esa postura de la mano es la neutra y la pinza no se mueve
+                            g = {"A0": A, "q0": brazo.giro(), "obj": brazo.giro()}
+                            giros[lado_r] = g
+                        # solo el giro de la mano alrededor del antebrazo; las
+                        # inclinaciones (doblar la muneca) se descartan
+                        theta = angulo_giro(A @ g["A0"].T, brazo.eje_giro())
+                        g["obj"] += a_g * (g["q0"] + theta - g["obj"])
                     # los brazos que dejan de verse mantienen su ultimo objetivo
                     for lado_r, s in suaves.items():
-                        estado["errores"][lado_r] = robot.brazos[lado_r].seguir(s["codo"], s["muneca"], dt, s["w"])
+                        brazo = robot.brazos[lado_r]
+                        estado["errores"][lado_r] = brazo.seguir(s["codo"], s["muneca"], dt, s["w"])
+                        brazo.mover_muneca(giros[lado_r]["obj"] if lado_r in giros else None, dt)
                         marcadores += [(s["codo"], COLOR_CODO), (s["muneca"], COLOR_MUNECA)]
 
                 robot.actualizar()
@@ -266,6 +305,7 @@ def main():
                     dibujar_marcadores(v.user_scn, marcadores)
                 v.sync()
 
+                estado["giros"] = {l: b.giro() for l, b in robot.brazos.items()}
                 estado["fps_control"] = 0.95 * estado["fps_control"] + 0.05 / max(dt, 1e-3)
                 if t0 > t_mensaje:
                     estado["mensaje"] = ""
@@ -282,19 +322,26 @@ def main():
                 elif tecla == ord("m"):
                     estado["espejo"] = not estado["espejo"]
                     suaves.clear()
+                    giros.clear()
                     estado["errores"].clear()
                     estado["pinzas"].clear()
+                elif tecla == ord("o"):
+                    giros.clear()
+                    estado["mensaje"] = "Giro de munecas recentrado"
+                    t_mensaje = t0 + 2.0
                 elif tecla == ord("v"):
                     desde_detras = not desde_detras
                     colocar_camara(v, robot, desde_detras)
                 elif tecla == ord("r"):
                     robot.reposo()
                     suaves.clear()
+                    giros.clear()
                     estado["errores"].clear()
                     estado["pinzas"].clear()
                 elif tecla == ord("c"):
                     if snap and "L" in snap["brazos"] and "R" in snap["brazos"] and snap["linea_hombros"] is not None:
                         R_cam = calibrar(snap["brazos"], snap["linea_hombros"])
+                        giros.clear()
                         estado["calibrado"] = True
                         estado["mensaje"] = "Calibrado"
                     else:

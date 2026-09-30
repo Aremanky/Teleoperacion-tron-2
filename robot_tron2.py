@@ -24,6 +24,38 @@ import numpy as np
 
 HINGE = int(mujoco.mjtJoint.mjJNT_HINGE)
 
+
+def log_rot(R):
+    """Vector rotacion (eje * angulo) de una matriz de rotacion."""
+    v = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+    c = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
+    ang = float(np.arccos(c))
+    sen = np.sin(ang)
+    if sen < 1e-6:
+        return 0.5 * v if ang < 1e-3 else ang * v / max(np.linalg.norm(v), 1e-9)
+    return (ang / (2.0 * sen)) * v
+
+
+def angulo_giro(R, eje):
+    """Parte de la rotacion R que es giro alrededor de 'eje' (unitario), en rad.
+    Descomposicion swing-twist: se queda solo con el 'retorcer' alrededor del eje y
+    descarta cualquier inclinacion, asi doblar la mano no cuenta como girarla."""
+    w = np.sqrt(max(0.0, 1.0 + np.trace(R))) / 2.0
+    if w > 1e-6:
+        v = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]]) / (4.0 * w)
+    else:   # giro de ~180 grados: eje desde la diagonal
+        v = np.sqrt(np.clip((np.diag(R) + 1.0) / 2.0, 0.0, None))
+    ang = 2.0 * np.arctan2(float(np.dot(v, eje)), w)
+    return float((ang + np.pi) % (2 * np.pi) - np.pi)
+
+
+def ortonormalizar(R):
+    """Gram-Schmidt: devuelve la rotacion valida mas cercana a R."""
+    x = R[:, 0] / np.linalg.norm(R[:, 0])
+    y = R[:, 1] - x * np.dot(R[:, 1], x)
+    y /= np.linalg.norm(y)
+    return np.column_stack([x, y, np.cross(x, y)])
+
 # Cuerpo final de cada brazo, por orden de preferencia ({lado} = L o R)
 CANDIDATOS_EF = ["grasper_{lado}_Link", "wrist_roll_{lado}_Link"]
 
@@ -32,6 +64,7 @@ CANDIDATOS_EF = ["grasper_{lado}_Link", "wrist_roll_{lado}_Link"]
 TOL_ESFERICO = 0.03
 
 VEL_MAX = 3.0          # rad/s: velocidad maxima de cada articulacion al seguir al operador
+W_ORIENT = 0.08        # m/rad: peso de la orientacion de la pinza frente a la posicion
 VEL_PINZA = 2.5        # 1/s: velocidad de apertura y cierre de la pinza (0 a 1 en 0.4 s)
 PINZA_INVERTIDA = False  # True si toda la pinza abre cuando deberia cerrar
 # Juntas que llevan "grasp" en el nombre pero NO forman parte del mecanismo de la
@@ -145,6 +178,16 @@ class Brazo:
         self.L_brazo = float(np.linalg.norm(codo - self.hombro))
         self.L_antebrazo = float(np.linalg.norm(muneca - codo))
         self._jac = np.zeros((3, m.nv))
+        self._jacr = np.zeros((3, m.nv))
+        # columnas de la muneca: las unicas que atienden a la orientacion de la pinza
+        self.mascara_muneca = np.array([j in self.j_muneca for j in self.juntas], dtype=float)
+        # junta de GIRO de la muneca: la de eje mas alineado con el antebrazo
+        # (en el TRON 2, wrist_yaw). Las demas de la muneca se mantienen rectas.
+        antebrazo = (muneca - codo) / max(np.linalg.norm(muneca - codo), 1e-9)
+        self.j_giro = max(self.j_muneca, key=lambda j: abs(np.dot(d.xaxis[j], antebrazo)))
+        self.i_giro = self.juntas.index(self.j_giro)
+        self.i_rigidas = [self.juntas.index(j) for j in self.j_muneca if j != self.j_giro]
+        self.giro_obj = None
         self.q_transicion = None
         self.t_atascado, self.t_rescate = 0.0, -1e9
         self.rng = np.random.default_rng(0)
@@ -284,6 +327,8 @@ class Brazo:
 
     def reposo(self):
         self.d.qpos[self.qadr] = self.q_reposo
+        if hasattr(self, "giro_obj"):
+            self.giro_obj = None
         if self.j_pinza:
             self.apertura = 1.0
             self.d.qpos[self.qadr_pinza] = self.q_abierto
@@ -292,19 +337,50 @@ class Brazo:
         q[self.limitado] = np.clip(q[self.limitado], self.lo[self.limitado], self.hi[self.limitado])
         return q
 
+    # ---------------- giro de la muneca ----------------
+    def eje_giro(self):
+        """Eje (mundo) de la junta de giro de la muneca, a lo largo del antebrazo."""
+        a = self.d.xaxis[self.j_giro]
+        return a / np.linalg.norm(a)
+
+    def giro(self):
+        return float(self.d.qpos[self.qadr[self.i_giro]])
+
+    def mover_muneca(self, giro_obj, dt):
+        """Muneca solo con giro: la junta de giro va hacia 'giro_obj' (rad) y las
+        demas juntas de la muneca se quedan rectas, en reposo. Como la muneca es
+        esferica, esto no mueve la posicion del brazo. Con giro_obj=None mantiene
+        el ultimo objetivo recibido."""
+        if giro_obj is not None:
+            self.giro_obj = float(np.clip(giro_obj, self.lo[self.i_giro], self.hi[self.i_giro])
+                                  if self.limitado[self.i_giro] else giro_obj)
+        q = self.d.qpos[self.qadr].copy()
+        paso = VEL_MAX * dt
+        if self.giro_obj is not None:
+            q[self.i_giro] += np.clip(self.giro_obj - q[self.i_giro], -paso, paso)
+        for k in self.i_rigidas:
+            q[k] += np.clip(self.q_reposo[k] - q[k], -paso, paso)
+        self._fijar(self._limitar(q))
+
     # ---------------- IK ----------------
     def _fijar(self, q):
         self.d.qpos[self.qadr] = q
         mujoco.mj_kinematics(self.m, self.d)
         mujoco.mj_comPos(self.m, self.d)  # necesario para mj_jac
 
-    def error(self, obj_c, obj_m, w_codo):
-        """(error ponderado, error codo, error muneca) en metros."""
+    def orientacion(self):
+        """Orientacion actual de la pinza (marco del efector final) en el mundo."""
+        return self.d.xmat[self.ef].reshape(3, 3)
+
+    def error(self, obj_c, obj_m, w_codo, R_obj=None):
+        """(error ponderado, error codo [m], error muneca [m], error giro [rad])."""
         p_c, p_m = self.puntos()
         ec, em = np.linalg.norm(obj_c - p_c), np.linalg.norm(obj_m - p_m)
-        return float(np.hypot(w_codo * ec, em)), float(ec), float(em)
+        eo = 0.0 if R_obj is None else float(np.linalg.norm(log_rot(R_obj @ self.orientacion().T)))
+        total = np.sqrt((w_codo * ec) ** 2 + em ** 2 + (W_ORIENT * eo) ** 2)
+        return float(total), float(ec), float(em), eo
 
-    def _paso(self, obj_c, obj_m, w_codo, lam, k_reposo, k_limite):
+    def _paso(self, obj_c, obj_m, R_obj, w_codo, lam, k_reposo, k_limite):
         """Un paso de IK que respeta los limites: si una articulacion se saldria de su
         rango, se bloquea y se recalcula el paso para que las demas compensen."""
         m, d = self.m, self.d
@@ -313,8 +389,14 @@ class Brazo:
         J_c = self._jac[:, self.dofs]
         mujoco.mj_jac(m, d, self._jac, None, p_m, self.b_muneca)
         J_m = self._jac[:, self.dofs]
-        J = np.vstack([w_codo * J_c, J_m])
-        e = np.concatenate([w_codo * (obj_c - p_c), obj_m - p_m])
+        filas_J = [w_codo * J_c, J_m]
+        filas_e = [w_codo * (obj_c - p_c), obj_m - p_m]
+        if R_obj is not None:   # tarea de orientacion de la pinza
+            mujoco.mj_jac(m, d, None, self._jacr, p_m, self.ef)
+            filas_J.append(W_ORIENT * self._jacr[:, self.dofs] * self.mascara_muneca)
+            filas_e.append(W_ORIENT * log_rot(R_obj @ self.orientacion().T))
+        J = np.vstack(filas_J)
+        e = np.concatenate(filas_e)
 
         q = d.qpos[self.qadr].copy()
         n = len(q)
@@ -336,16 +418,16 @@ class Brazo:
             libres &= ~fuera
         return q, dq
 
-    def resolver(self, obj_c, obj_m, w_codo=0.6, iteraciones=4, max_cambio=np.inf,
-                 lam=0.05, k_reposo=0.01, k_limite=0.02, paso_max=0.2):
+    def resolver(self, obj_c, obj_m, R_obj=None, w_codo=0.6, iteraciones=4,
+                 max_cambio=np.inf, lam=0.05, k_reposo=0.01, k_limite=0.02, paso_max=0.2):
         """IK por minimos cuadrados amortiguados con busqueda lineal: solo se aceptan
         pasos que no empeoran el error, asi el brazo nunca 'da bandazos'.
         max_cambio: giro maximo de cada articulacion en esta llamada (rad).
         Devuelve el error final (m) del codo y de la muneca."""
         q0 = self.d.qpos[self.qadr].copy()
-        err = self.error(obj_c, obj_m, w_codo)[0]
+        err = self.error(obj_c, obj_m, w_codo, R_obj)[0]
         for _ in range(iteraciones):
-            q, dq = self._paso(obj_c, obj_m, w_codo, lam, k_reposo, k_limite)
+            q, dq = self._paso(obj_c, obj_m, R_obj, w_codo, lam, k_reposo, k_limite)
             mayor = np.abs(dq).max()
             if mayor > paso_max:
                 dq *= paso_max / mayor
@@ -354,7 +436,7 @@ class Brazo:
                 q_n = self._limitar(q + alfa * dq)
                 q_n = q0 + np.clip(q_n - q0, -max_cambio, max_cambio)
                 self._fijar(q_n)
-                err_n = self.error(obj_c, obj_m, w_codo)[0]
+                err_n = self.error(obj_c, obj_m, w_codo, R_obj)[0]
                 if err_n <= err + 1e-4:
                     err, aceptado = err_n, True
                     break
@@ -362,10 +444,10 @@ class Brazo:
             if not aceptado:
                 self._fijar(q)
                 break
-        _, ec, em = self.error(obj_c, obj_m, w_codo)
-        return ec, em
+        _, ec, em, eo = self.error(obj_c, obj_m, w_codo, R_obj)
+        return ec, em, eo
 
-    def seguir(self, obj_c, obj_m, dt, w_codo=0.6):
+    def seguir(self, obj_c, obj_m, dt, w_codo=0.6, R_obj=None):
         """Llamar en cada ciclo del bucle de control. IK con limite de velocidad y,
         si el brazo se queda atascado lejos del objetivo (minimo local, limites),
         busca otra solucion y va hacia ella de forma suave."""
@@ -377,20 +459,20 @@ class Brazo:
                 self.q_transicion = None
             else:
                 self._fijar(q + np.clip(falta, -VEL_TRANSICION * dt, VEL_TRANSICION * dt))
-                _, ec, em = self.error(obj_c, obj_m, w_codo)
-                return ec, em
+                _, ec, em, eo = self.error(obj_c, obj_m, w_codo, R_obj)
+                return ec, em, eo
 
-        ec, em = self.resolver(obj_c, obj_m, w_codo, max_cambio=VEL_MAX * dt)
-        err = self.error(obj_c, obj_m, w_codo)[0]
+        ec, em, eo = self.resolver(obj_c, obj_m, R_obj, w_codo, max_cambio=VEL_MAX * dt)
+        err = float(np.hypot(w_codo * ec, em))   # solo posicion
         self.t_atascado = self.t_atascado + dt if err > ERROR_ATASCO else 0.0
         if self.t_atascado > T_ATASCO and ahora - self.t_rescate > 1.0:
             self.t_rescate, self.t_atascado = ahora, 0.0
-            q_mejor, err_mejor = self._rescate(obj_c, obj_m, w_codo)
+            q_mejor, err_mejor = self._rescate(obj_c, obj_m, None, w_codo)
             if err_mejor < 0.5 * err:
                 self.q_transicion = q_mejor
-        return ec, em
+        return ec, em, eo
 
-    def _rescate(self, obj_c, obj_m, w_codo):
+    def _rescate(self, obj_c, obj_m, R_obj, w_codo):
         """Prueba varias posturas de partida y devuelve la que mejor alcanza el objetivo."""
         q_act = self.d.qpos[self.qadr].copy()
         semillas = [self.q_reposo.copy()]
@@ -406,8 +488,8 @@ class Brazo:
         mejor_q, mejor_err = q_act, np.inf
         for s in semillas:
             self._fijar(self._limitar(s))
-            self.resolver(obj_c, obj_m, w_codo, iteraciones=25)
-            err = self.error(obj_c, obj_m, w_codo)[0]
+            self.resolver(obj_c, obj_m, R_obj, w_codo, iteraciones=25)
+            err = self.error(obj_c, obj_m, w_codo, R_obj)[0]
             if err < mejor_err:
                 mejor_q, mejor_err = self.d.qpos[self.qadr].copy(), err
         self._fijar(q_act)
