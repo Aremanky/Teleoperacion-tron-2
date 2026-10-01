@@ -1,2 +1,5 @@
-
-pip install "mujoco>=3.2" numpy "mujoco>=3.2" "depthai>=3" mediapipe
+mujoco>=3.2
+numpy
+mujoco>=3.2
+depthai>=3
+mediapipe

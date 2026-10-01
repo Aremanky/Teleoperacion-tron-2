@@ -3,6 +3,7 @@
 config.yaml
 **/meshes/*.urdf
 
+.venv/
 # --- ROS / colcon / catkin build outputs ---
 build/
 install/
@@ -58,3 +59,8 @@ Thumbs.db
 /tmp/
 /out/
 *.log
+
+
+# --- Autogenerativas ---
+pose_landmarker_full.task
+hand_landmarker.task
