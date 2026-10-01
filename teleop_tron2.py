@@ -9,6 +9,7 @@ Uso (desde la raiz de tron2-robot-description, con estos 4 .py copiados alli):
   python teleop_tron2.py --sin-manos         # no seguir las manos (va mas rapido)
   python teleop_tron2.py --sin-giro          # manos solo para abrir/cerrar, sin girar la muneca
   python teleop_tron2.py --escenario tuberias  # arranca ya con el escenario de tuberias a la vista
+  python teleop_tron2.py --orca              # OrcaHand en lugar de las pinzas (ver mano_orca.py)
 
 Las pinzas siguen a las manos: palma abierta abre la pinza, puno cerrado la
 cierra, y las posiciones intermedias se reproducen de forma proporcional.
@@ -61,6 +62,7 @@ ANG_RECTO = (10.0, 30.0)   # grados: con el brazo casi recto se ignora el codo (
 TAU_GIRO = 0.12            # s: suavizado de la orientacion (mas alto = mas suave, mas retraso)
 ESPEJO_M = np.diag([1.0, -1.0, 1.0])   # reflexion izquierda-derecha en el marco del robot
 ZONA_MUERTA_CODO = (5.0, 25.0)  # grados: flexiones menores se tratan como brazo recto (se atenuan)
+UMBRAL_CONGELADO = 0.08    # m: error de muneca a partir del cual se avisa de que el robot no llega
 
 COLOR_CODO = [1.0, 0.85, 0.0, 0.8]    # marcador amarillo en MuJoCo
 COLOR_MUNECA = [0.1, 1.0, 0.3, 0.8]   # marcador verde en MuJoCo
@@ -213,6 +215,10 @@ def componer_vista(snap, estado):
         lineas.append(estado["mensaje"])
     for k, s in enumerate(lineas):
         texto(img, s, (10, 22 + 22 * k))
+    # avisos en ROJO: por que un brazo del robot se ha quedado quieto
+    for k, (lado, motivo) in enumerate(sorted(estado.get("congelado", {}).items())):
+        texto(img, f"Robot {'IZQ' if lado == 'L' else 'DER'} QUIETO: {motivo}",
+              (10, 22 + 22 * (len(lineas) + k)), (0, 0, 255))
     texto(img, "q salir | p pausa | c calibrar | o recentrar giro | m espejo | v vista | r reposo | 1 tuberias",
           (10, h - 12), escala=0.42)
     return img
@@ -229,10 +235,13 @@ def main():
     ap.add_argument("--sin-giro", action="store_true", help="no orientar la pinza con la mano")
     ap.add_argument("--escenario", choices=["tuberias"], default=None,
                     help="anade un escenario de trabajo alrededor del robot")
+    ap.add_argument("--orca", action="store_true", help="OrcaHand en lugar de las pinzas")
     args = ap.parse_args()
+    if args.orca:
+        import mano_orca
 
     # El escenario de tuberias siempre se carga, pero oculto; la tecla 1 lo muestra.
-    robot = RobotTron2(args.xml, escenario_tuberias.anadir_al_modelo)
+    robot = RobotTron2(args.xml, escenario_tuberias.anadir_al_modelo, orca=args.orca)
     escena = escenario_tuberias.EscenarioTuberias(robot)
     robot.resumen()
     seg = SeguidorBrazos(args.modelo, usar_profundidad=not args.solo_mediapipe)
@@ -248,7 +257,8 @@ def main():
     suaves = {}           # lado del robot -> objetivos suavizados {codo, muneca, w, R}
     giros = {}            # lado del robot -> {"A0": mano neutra, "q0": giro neutro, "obj": objetivo}
     desde_detras = True
-    t_mensaje, n_mostrado = 0.0, -1
+    t_mensaje, n_mostrado, n_mano = 0.0, -1, -1
+    congelado_ant, t_lejos = {}, {}
     cv2.namedWindow(VENTANA, cv2.WINDOW_NORMAL)
 
     try:
@@ -272,6 +282,30 @@ def main():
                 brazos = snap["brazos"] if fresco else {}
                 aperturas = snap["aperturas"] if fresco else {}
 
+                # Diagnostico: por que se queda quieto cada brazo (se muestra en rojo)
+                estado["congelado"] = {}
+                if not estado["pausado"]:
+                    for lado_r in ("L", "R"):
+                        lado_h = OTRO_LADO[lado_r] if estado["espejo"] else lado_r
+                        err = estado["errores"].get(lado_r)
+                        if not fresco:
+                            motivo = "sin datos nuevos de la camara"
+                        elif lado_h not in brazos:
+                            motivo = f"no se ve tu brazo {'IZQ' if lado_h == 'L' else 'DER'}"
+                        elif err is not None and err[1] > UMBRAL_CONGELADO:
+                            t_lejos[lado_r] = t_lejos.get(lado_r, 0.0) + dt
+                            if t_lejos[lado_r] < 0.5:      # en un movimiento rapido es normal un momento
+                                continue
+                            motivo = f"no llega al objetivo (error muneca {err[1] * 100:.0f} cm)"
+                        else:
+                            t_lejos[lado_r] = 0.0
+                            continue
+                        estado["congelado"][lado_r] = motivo
+                if estado["congelado"] != congelado_ant:
+                    for lado_r, motivo in estado["congelado"].items():
+                        print(f"[{time.strftime('%H:%M:%S')}] robot {lado_r} quieto: {motivo}")
+                    congelado_ant = dict(estado["congelado"])
+
                 marcadores = []
                 if not estado["pausado"]:
                     a = 1.0 - np.exp(-dt / TAU_OBJETIVO)
@@ -289,11 +323,21 @@ def main():
                     # las pinzas siguen a las manos; si una mano deja de verse,
                     # la pinza se queda como estaba
                     a_g = 1.0 - np.exp(-dt / TAU_GIRO)
+                    foto_nueva = fresco and snap["n"] != n_mano   # el retargeting, 1 vez por foto
+                    if foto_nueva:
+                        n_mano = snap["n"]
                     for lado_h, mano in aperturas.items():
                         lado_r = OTRO_LADO[lado_h] if estado["espejo"] else lado_h
                         brazo = robot.brazos[lado_r]
-                        minimo = escena.apertura_minima(lado_r) if escena else 0.0
-                        brazo.mover_pinza(max(mano["apertura"], minimo), dt)
+                        if brazo.mano is not None:              # OrcaHand
+                            if foto_nueva:
+                                if mano.get("mundo") is not None:   # dedo a dedo
+                                    brazo.mano.nuevo_objetivo(mano["mundo"], espejar=(lado_h == "L"))
+                                else:                               # solo abrir / cerrar
+                                    brazo.mano.objetivo_por_apertura(mano["apertura"])
+                        else:                                   # pinza original
+                            minimo = escena.apertura_minima(lado_r) if escena else 0.0
+                            brazo.mover_pinza(max(mano["apertura"], minimo), dt)
                         estado["pinzas"][lado_r] = mano["apertura"]
                         if not girar:
                             continue
@@ -307,6 +351,11 @@ def main():
                         # inclinaciones (doblar la muneca) se descartan
                         theta = angulo_giro(A @ g["A0"].T, brazo.eje_giro())
                         g["obj"] += a_g * (g["q0"] + theta - g["obj"])
+                    # las OrcaHand se mueven en cada ciclo hacia su ultimo objetivo; con el
+                    # tubo cogido los dedos no cierran mas alla de su grosor
+                    for lado_r, orca in robot.manos.items():
+                        sujeta = escena.activa and escena.sujeta == lado_r
+                        orca.mover(dt, mano_orca.TOPE_TUBO if sujeta else None)
                     # los brazos que dejan de verse mantienen su ultimo objetivo
                     for lado_r, s in suaves.items():
                         brazo = robot.brazos[lado_r]

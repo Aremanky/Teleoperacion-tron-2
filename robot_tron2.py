@@ -69,7 +69,7 @@ VEL_PINZA = 2.5        # 1/s: velocidad de apertura y cierre de la pinza (0 a 1 
 PINZA_INVERTIDA = False  # True si toda la pinza abre cuando deberia cerrar
 # Juntas que llevan "grasp" en el nombre pero NO forman parte del mecanismo de la
 # pinza (p.ej. la que orienta la pinza entera). Se dejan quietas.
-PINZA_EXCLUIR = ("grasper_base",)
+PINZA_EXCLUIR = ("grasper_base", "orca")   # "orca": juntas de las OrcaHand (las mueve mano_orca.py)
 # Juntas sueltas del mecanismo cuyo sentido hay que invertir (por su nombre exacto)
 PINZA_JUNTAS_INVERTIDAS = ()
 # Recorrido a mano para juntas de la pinza SIN limites en el XML (no se puede
@@ -130,6 +130,7 @@ def centro_de_ejes(d, juntas):
 class Brazo:
     def __init__(self, m, d, lado):
         self.m, self.d, self.lado = m, d, lado
+        self.mano = None   # OrcaHand montada en esta muneca (la asigna RobotTron2 con orca=True)
         self.ef = self._buscar_ef()
         cadena = self._cadena(self.ef)
         self.raiz = cadena[0]
@@ -332,6 +333,8 @@ class Brazo:
 
     def reposo(self):
         self.d.qpos[self.qadr] = self.q_reposo
+        if getattr(self, "mano", None) is not None:
+            self.mano.reposo()
         if hasattr(self, "giro_obj"):
             self.giro_obj = None
         if self.j_pinza:
@@ -357,7 +360,9 @@ class Brazo:
         self.geoms_agarre = geoms_de(mordazas) or geoms_de(cuerpos)
 
     def punto_agarre(self):
-        """Punto (mundo) entre las mordazas de la pinza."""
+        """Punto (mundo) entre las mordazas de la pinza (o en la palma de la OrcaHand)."""
+        if self.mano is not None:
+            return self.mano.punto_agarre()
         if self.geoms_agarre:
             return self.d.geom_xpos[self.geoms_agarre].mean(axis=0)
         return self.d.xpos[self.ef].copy()
@@ -395,6 +400,8 @@ class Brazo:
 
     def orientacion(self):
         """Orientacion actual de la pinza (marco del efector final) en el mundo."""
+        if self.mano is not None:
+            return self.mano.orientacion()
         return self.d.xmat[self.ef].reshape(3, 3)
 
     def error(self, obj_c, obj_m, w_codo, R_obj=None):
@@ -522,14 +529,30 @@ class Brazo:
 
 
 class RobotTron2:
-    def __init__(self, ruta_xml, escenario=None):
+    def __init__(self, ruta_xml, escenario=None, orca=False):
+        """orca=True: quita las pinzas y monta una OrcaHand en cada muneca (mano_orca.py)."""
         self.origen = ruta_xml
-        self.ruta = quitar_base_flotante(ruta_xml, escenario)
-        self.m = mujoco.MjModel.from_xml_path(self.ruta)
+        if orca:
+            import mano_orca
+
+            def extra(root):
+                if escenario is not None:
+                    escenario(root)
+                mano_orca.quitar_pinzas(root)
+
+            self.ruta = quitar_base_flotante(ruta_xml, extra)
+            self.m = mano_orca.montar_manos(self.ruta)
+        else:
+            self.ruta = quitar_base_flotante(ruta_xml, escenario)
+            self.m = mujoco.MjModel.from_xml_path(self.ruta)
         self.d = mujoco.MjData(self.m)
         mujoco.mj_kinematics(self.m, self.d)
         mujoco.mj_comPos(self.m, self.d)
         self.brazos = {lado: Brazo(self.m, self.d, lado) for lado in ("L", "R")}
+        self.manos = {}
+        if orca:
+            for lado, brazo in self.brazos.items():
+                brazo.mano = self.manos[lado] = mano_orca.ManoOrca(self.m, self.d, lado)
         self.actualizar()
         # Orientacion del torso en el mundo (x delante, y izquierda, z arriba)
         self.R_base = self.d.xmat[self.brazos["L"].raiz].reshape(3, 3).copy()

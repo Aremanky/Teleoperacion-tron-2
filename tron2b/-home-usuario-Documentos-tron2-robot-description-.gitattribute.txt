@@ -1,2 +1,0 @@
-/home/usuario/Documentos/tron2-robot-description/.gitattributes
-/home/usuario/Documentos/tron2-robot-description/.gitignore

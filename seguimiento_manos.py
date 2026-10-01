@@ -164,14 +164,14 @@ class SeguidorManos:
                     lado, dist = s, d
             if lado is None or dist > DIST_MAX_MUNECA * w:
                 continue
-            candidatos.append((dist, lado, razon, px, R))
+            candidatos.append((dist, lado, razon, px, R, mundo))
 
         datos = {}
-        for dist, lado, razon, px, R in sorted(candidatos, key=lambda c: c[0]):
+        for dist, lado, razon, px, R, mundo in sorted(candidatos, key=lambda c: c[0]):
             if lado in datos:
                 continue
             apertura = self.filtros[lado](self.a_apertura(razon), t)
-            datos[lado] = {"apertura": apertura, "marco": R}
+            datos[lado] = {"apertura": apertura, "marco": R, "mundo": mundo}
             self.manos.append({"lado": lado, "apertura": apertura,
                                "bruto": razon, "puntos_px": px})
         return datos

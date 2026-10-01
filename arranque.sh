@@ -15,7 +15,7 @@ source .venv/bin/activate
 # Instalar dependencias si existe el archivo requirements.txt
 if [ -f "requirements.txt" ]; then
     echo "Instalando dependencias desde requirements.txt..."
-    pip install -r requirements.txt
+    pip install "mujoco>=3.2" numpy "mujoco>=3.2" "depthai>=3" mediapipe
 else
     echo "Advertencia: No se encontró requirements.txt, saltando la instalación."
 fi

@@ -1,5 +1,2 @@
-mujoco>=3.2
-numpy
-mujoco>=3.2
-depthai>=3
-mediapipe
+
+pip install "mujoco>=3.2" numpy "depthai>=3" mediapipe opencv-python

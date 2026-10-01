@@ -1,0 +1,422 @@
+.
+├── arranque.sh
+├── camaras.py
+├── decoracion
+│   ├── I+D+I_DENOMIN_GRUPO_RGB.png
+│   └── Logo_Elecnor_AZUL.png
+├── escenario_tuberias.py
+├── package.xml
+├── __pycache__
+│   ├── camaras.cpython-312.pyc
+│   ├── escenario_tuberias.cpython-312.pyc
+│   ├── robot_tron2.cpython-312.pyc
+│   ├── seguimiento_brazos.cpython-312.pyc
+│   └── seguimiento_manos.cpython-312.pyc
+├── README.md
+├── requirements.txt
+├── robot_tron2.py
+├── seguimiento_brazos.py
+├── seguimiento_manos.py
+├── teleop_tron2.py
+├── tree.txt
+├── tron2a
+│   ├── DACH_TRON2A
+│   │   ├── meshes
+│   │   │   ├── base_2_Link.STL
+│   │   │   ├── base_3_Link.STL
+│   │   │   ├── base_Link.STL
+│   │   │   ├── elbow_L_Link.STL
+│   │   │   ├── elbow_R_Link.STL
+│   │   │   ├── grasper_L_bar_left_Link.STL
+│   │   │   ├── grasper_L_bar_right_Link.STL
+│   │   │   ├── grasper_L_base_Link.STL
+│   │   │   ├── grasper_L_crank_left_Link.STL
+│   │   │   ├── grasper_L_crank_right_Link.STL
+│   │   │   ├── grasper_L_jaw_left_Link.STL
+│   │   │   ├── grasper_L_jaw_right_Link.STL
+│   │   │   ├── grasper_L_Link.STL
+│   │   │   ├── grasper_L_nut_Link.STL
+│   │   │   ├── grasper_R_bar_left_Link.STL
+│   │   │   ├── grasper_R_bar_right_Link.STL
+│   │   │   ├── grasper_R_base_Link.STL
+│   │   │   ├── grasper_R_crank_left_Link.STL
+│   │   │   ├── grasper_R_crank_right_Link.STL
+│   │   │   ├── grasper_R_jaw_left_Link.STL
+│   │   │   ├── grasper_R_jaw_right_Link.STL
+│   │   │   ├── grasper_R_Link.STL
+│   │   │   ├── grasper_R_nut_Link.STL
+│   │   │   ├── head_base_Link.STL
+│   │   │   ├── head_pitch_Link.STL
+│   │   │   ├── head_yaw_Link.STL
+│   │   │   ├── proximal_pitch_L_Link.STL
+│   │   │   ├── proximal_pitch_R_Link.STL
+│   │   │   ├── proximal_roll_L_Link.STL
+│   │   │   ├── proximal_roll_R_Link.STL
+│   │   │   ├── proximal_yaw_L_Link_collision.STL
+│   │   │   ├── proximal_yaw_L_Link.STL
+│   │   │   ├── proximal_yaw_R_Link_collision.STL
+│   │   │   ├── proximal_yaw_R_Link.STL
+│   │   │   ├── wrist_pitch_L_Link.STL
+│   │   │   ├── wrist_pitch_R_Link.STL
+│   │   │   ├── wrist_roll_L_Link_cam.STL
+│   │   │   ├── wrist_roll_L_Link_collision.STL
+│   │   │   ├── wrist_roll_L_Link.STL
+│   │   │   ├── wrist_roll_R_Link_cam.STL
+│   │   │   ├── wrist_roll_R_Link_collision.STL
+│   │   │   ├── wrist_roll_R_Link.STL
+│   │   │   ├── wrist_yaw_L_Link.STL
+│   │   │   └── wrist_yaw_R_Link.STL
+│   │   ├── urdf
+│   │   │   ├── robot_grasper.urdf
+│   │   │   ├── robot_rl.urdf
+│   │   │   ├── robot.urdf
+│   │   │   └── robot_zeromass_graser.urdf
+│   │   ├── usd
+│   │   │   ├── configuration
+│   │   │   │   ├── robot_base.usd
+│   │   │   │   ├── robot_physics.usd
+│   │   │   │   ├── robot_robot.usd
+│   │   │   │   └── robot_sensor.usd
+│   │   │   └── robot.usd
+│   │   ├── xacro
+│   │   │   ├── macros.xacro
+│   │   │   └── robot.urdf.xacro
+│   │   └── xml
+│   │       ├── decoracion_tex
+│   │       │   ├── tex_i_d_i_denomin_grupo_rgb.png
+│   │       │   └── tex_logo_elecnor_azul.png
+│   │       ├── robot_elecnor.xml
+│   │       ├── robot_fixed.xml
+│   │       ├── robot_grasper.xml
+│   │       ├── robot.xml
+│   │       └── simulacion.xml
+│   ├── DASF2_TRON2A
+│   │   ├── meshes
+│   │   │   ├── ankle_pitch_L_B_Link.STL
+│   │   │   ├── ankle_pitch_L_F_Link.STL
+│   │   │   ├── ankle_pitch_R_B_Link.STL
+│   │   │   ├── ankle_pitch_R_F_Link.STL
+│   │   │   ├── back_base_Link.STL
+│   │   │   ├── elbow_L_Link.STL
+│   │   │   ├── elbow_R_Link.STL
+│   │   │   ├── front_base_Link.STL
+│   │   │   ├── grasper_L_Link.STL
+│   │   │   ├── grasper_R_Link.STL
+│   │   │   ├── head_base_Link.STL
+│   │   │   ├── head_pitch_Link.STL
+│   │   │   ├── head_yaw_Link.STL
+│   │   │   ├── knee_L_B_Link.STL
+│   │   │   ├── knee_L_F_Link.STL
+│   │   │   ├── knee_R_B_Link.STL
+│   │   │   ├── knee_R_F_Link.STL
+│   │   │   ├── proximal_pitch_L_B_Link.STL
+│   │   │   ├── proximal_pitch_L_F_Link.STL
+│   │   │   ├── proximal_pitch_L_H_Link.STL
+│   │   │   ├── proximal_pitch_R_B_Link.STL
+│   │   │   ├── proximal_pitch_R_F_Link.STL
+│   │   │   ├── proximal_pitch_R_H_Link.STL
+│   │   │   ├── proximal_roll_L_B_Link.STL
+│   │   │   ├── proximal_roll_L_F_Link.STL
+│   │   │   ├── proximal_roll_L_H_Link.STL
+│   │   │   ├── proximal_roll_R_B_Link.STL
+│   │   │   ├── proximal_roll_R_F_Link.STL
+│   │   │   ├── proximal_roll_R_H_Link.STL
+│   │   │   ├── proximal_yaw_L_B_Link.STL
+│   │   │   ├── proximal_yaw_L_F_Link.STL
+│   │   │   ├── proximal_yaw_L_H_Link_collision.STL
+│   │   │   ├── proximal_yaw_L_H_Link.STL
+│   │   │   ├── proximal_yaw_R_B_Link.STL
+│   │   │   ├── proximal_yaw_R_F_Link.STL
+│   │   │   ├── proximal_yaw_R_H_Link_collision.STL
+│   │   │   ├── proximal_yaw_R_H_Link.STL
+│   │   │   ├── transition_middle_Link.STL
+│   │   │   ├── transition_upper_Link.STL
+│   │   │   ├── upper_base_Link.STL
+│   │   │   ├── wrist_pitch_L_Link.STL
+│   │   │   ├── wrist_pitch_R_Link.STL
+│   │   │   ├── wrist_roll_L_Link_collision.STL
+│   │   │   ├── wrist_roll_L_Link.STL
+│   │   │   ├── wrist_roll_R_Link_collision.STL
+│   │   │   ├── wrist_roll_R_Link.STL
+│   │   │   ├── wrist_yaw_L_Link.STL
+│   │   │   └── wrist_yaw_R_Link.STL
+│   │   ├── urdf
+│   │   │   ├── robot_rl.urdf
+│   │   │   ├── robot.urdf
+│   │   │   └── robot_zeromass_graser.urdf
+│   │   ├── usd
+│   │   │   ├── configuration
+│   │   │   │   ├── robot_base.usd
+│   │   │   │   ├── robot_physics.usd
+│   │   │   │   ├── robot_robot.usd
+│   │   │   │   └── robot_sensor.usd
+│   │   │   └── robot.usd
+│   │   └── xml
+│   │       ├── default_pose.xml
+│   │       └── robot.xml
+│   ├── DASF_TRON2A
+│   │   ├── meshes
+│   │   │   ├── ankle_pitch_L_Link.STL
+│   │   │   ├── ankle_pitch_R_Link.STL
+│   │   │   ├── base_Link.STL
+│   │   │   ├── elbow_L_U_Link.STL
+│   │   │   ├── elbow_R_U_Link.STL
+│   │   │   ├── grasper_L_U_Link.STL
+│   │   │   ├── grasper_R_U_Link.STL
+│   │   │   ├── head_base_Link.STL
+│   │   │   ├── head_pitch_Link.STL
+│   │   │   ├── head_yaw_Link.STL
+│   │   │   ├── knee_L_Link.STL
+│   │   │   ├── knee_R_Link.STL
+│   │   │   ├── proximal_pitch_L_Link.STL
+│   │   │   ├── proximal_pitch_L_U_Link.STL
+│   │   │   ├── proximal_pitch_R_Link.STL
+│   │   │   ├── proximal_pitch_R_U_Link.STL
+│   │   │   ├── proximal_roll_L_Link.STL
+│   │   │   ├── proximal_roll_L_U_Link.STL
+│   │   │   ├── proximal_roll_R_Link.STL
+│   │   │   ├── proximal_roll_R_U_Link.STL
+│   │   │   ├── proximal_yaw_L_Link.STL
+│   │   │   ├── proximal_yaw_L_U_Link_collision.STL
+│   │   │   ├── proximal_yaw_L_U_Link.STL
+│   │   │   ├── proximal_yaw_R_Link.STL
+│   │   │   ├── proximal_yaw_R_U_Link_collision.STL
+│   │   │   ├── proximal_yaw_R_U_Link.STL
+│   │   │   ├── transition_upper_Link.STL
+│   │   │   ├── upper_base_Link.STL
+│   │   │   ├── wrist_pitch_L_U_Link.STL
+│   │   │   ├── wrist_pitch_R_U_Link.STL
+│   │   │   ├── wrist_roll_L_U_Link_collision.STL
+│   │   │   ├── wrist_roll_L_U_Link.STL
+│   │   │   ├── wrist_roll_R_U_Link_collision.STL
+│   │   │   ├── wrist_roll_R_U_Link.STL
+│   │   │   ├── wrist_yaw_L_U_Link.STL
+│   │   │   └── wrist_yaw_R_U_Link.STL
+│   │   ├── urdf
+│   │   │   ├── robot_rl.urdf
+│   │   │   └── robot_zeromass_graser.urdf
+│   │   ├── usd
+│   │   │   ├── configuration
+│   │   │   │   ├── robot_base.usd
+│   │   │   │   ├── robot_physics.usd
+│   │   │   │   ├── robot_robot.usd
+│   │   │   │   └── robot_sensor.usd
+│   │   │   └── robot.usd
+│   │   ├── xacro
+│   │   │   ├── macros.xacro
+│   │   │   └── robot.urdf.xacro
+│   │   └── xml
+│   │       └── robot.xml
+│   ├── DA_TRON2A
+│   │   ├── meshes
+│   │   │   ├── base_2_Link.STL
+│   │   │   ├── base_3_Link.STL
+│   │   │   ├── base_Link.STL
+│   │   │   ├── elbow_L_Link.STL
+│   │   │   ├── elbow_R_Link.STL
+│   │   │   ├── grasper_L_Link.STL
+│   │   │   ├── grasper_R_Link.STL
+│   │   │   ├── proximal_pitch_L_Link.STL
+│   │   │   ├── proximal_pitch_R_Link.STL
+│   │   │   ├── proximal_roll_L_Link.STL
+│   │   │   ├── proximal_roll_R_Link.STL
+│   │   │   ├── proximal_yaw_L_Link_collision.STL
+│   │   │   ├── proximal_yaw_L_Link.STL
+│   │   │   ├── proximal_yaw_R_Link_collision.STL
+│   │   │   ├── proximal_yaw_R_Link.STL
+│   │   │   ├── wrist_pitch_L_Link.STL
+│   │   │   ├── wrist_pitch_R_Link.STL
+│   │   │   ├── wrist_roll_L_Link_collision.STL
+│   │   │   ├── wrist_roll_L_Link.STL
+│   │   │   ├── wrist_roll_R_Link_collision.STL
+│   │   │   ├── wrist_roll_R_Link.STL
+│   │   │   ├── wrist_yaw_L_Link.STL
+│   │   │   └── wrist_yaw_R_Link.STL
+│   │   ├── urdf
+│   │   │   ├── robot_rl.urdf
+│   │   │   └── robot.urdf
+│   │   ├── usd
+│   │   │   ├── configuration
+│   │   │   │   ├── robot_base.usd
+│   │   │   │   ├── robot_physics.usd
+│   │   │   │   ├── robot_robot.usd
+│   │   │   │   └── robot_sensor.usd
+│   │   │   └── robot.usd
+│   │   ├── xacro
+│   │   │   ├── macros.xacro
+│   │   │   └── robot.urdf.xacro
+│   │   └── xml
+│   │       └── robot.xml
+│   ├── SF_TRON2A
+│   │   ├── meshes
+│   │   │   ├── ankle_pitch_L_Link.STL
+│   │   │   ├── ankle_pitch_R_Link.STL
+│   │   │   ├── base_Link.STL
+│   │   │   ├── knee_L_Link.STL
+│   │   │   ├── knee_R_Link.STL
+│   │   │   ├── proximal_pitch_L_Link.STL
+│   │   │   ├── proximal_pitch_R_Link.STL
+│   │   │   ├── proximal_roll_L_Link.STL
+│   │   │   ├── proximal_roll_R_Link.STL
+│   │   │   ├── proximal_yaw_L_Link.STL
+│   │   │   └── proximal_yaw_R_Link.STL
+│   │   ├── urdf
+│   │   │   ├── robot_rl.urdf
+│   │   │   └── robot.urdf
+│   │   ├── usd
+│   │   │   ├── configuration
+│   │   │   │   ├── robot_base.usd
+│   │   │   │   ├── robot_physics.usd
+│   │   │   │   ├── robot_robot.usd
+│   │   │   │   └── robot_sensor.usd
+│   │   │   └── robot.usd
+│   │   ├── xacro
+│   │   │   ├── macros.xacro
+│   │   │   └── robot.urdf.xacro
+│   │   └── xml
+│   │       └── robot.xml
+│   ├── SFYG_TRON2A
+│   │   ├── meshes
+│   │   │   ├── ankle_pitch_L_Link.STL
+│   │   │   ├── ankle_pitch_R_Link.STL
+│   │   │   ├── antenna_L_Link_collision_1.STL
+│   │   │   ├── antenna_L_Link_collision_2.STL
+│   │   │   ├── antenna_L_Link.STL
+│   │   │   ├── antenna_R_Link_collision_1.STL
+│   │   │   ├── antenna_R_Link_collision_2.STL
+│   │   │   ├── antenna_R_Link.STL
+│   │   │   ├── arm1_Link.STL
+│   │   │   ├── arm2_Link_collision1.STL
+│   │   │   ├── arm2_Link_collision2.STL
+│   │   │   ├── arm2_Link.STL
+│   │   │   ├── arm3_Link_collision1.STL
+│   │   │   ├── arm3_Link_collision2.STL
+│   │   │   ├── arm3_Link.STL
+│   │   │   ├── arm4_Link_collision1.STL
+│   │   │   ├── arm4_Link_collision2.STL
+│   │   │   ├── arm4_Link.STL
+│   │   │   ├── arm5_Link.STL
+│   │   │   ├── arm6_Link.STL
+│   │   │   ├── arm_base_Link.STL
+│   │   │   ├── base_Link.STL
+│   │   │   ├── camera_mount_Link.STL
+│   │   │   ├── gripper1_Link.STL
+│   │   │   ├── gripper2_Link.STL
+│   │   │   ├── gripper_base_Link_collision1.STL
+│   │   │   ├── gripper_base_Link_collision2.STL
+│   │   │   ├── gripper_base_Link.STL
+│   │   │   ├── knee_L_Link.STL
+│   │   │   ├── knee_R_Link.STL
+│   │   │   ├── proximal_pitch_L_Link.STL
+│   │   │   ├── proximal_pitch_R_Link.STL
+│   │   │   ├── proximal_roll_L_Link.STL
+│   │   │   ├── proximal_roll_R_Link.STL
+│   │   │   ├── proximal_yaw_L_Link.STL
+│   │   │   ├── proximal_yaw_R_Link.STL
+│   │   │   ├── radar_Link.STL
+│   │   │   ├── transition_Link_collision_1.STL
+│   │   │   ├── transition_Link_collision_2.STL
+│   │   │   └── transition_Link.STL
+│   │   ├── urdf
+│   │   │   ├── robot_rl.urdf
+│   │   │   └── robot.urdf
+│   │   ├── usd
+│   │   │   ├── configuration
+│   │   │   │   ├── robot_base.usd
+│   │   │   │   ├── robot_physics.usd
+│   │   │   │   ├── robot_robot.usd
+│   │   │   │   └── robot_sensor.usd
+│   │   │   └── robot.usd
+│   │   ├── xacro
+│   │   │   ├── macros.xacro
+│   │   │   └── robot.urdf.xacro
+│   │   └── xml
+│   │       └── robot.xml
+│   ├── WF_TRON2A
+│   │   ├── meshes
+│   │   │   ├── base_Link.STL
+│   │   │   ├── knee_L_Link.STL
+│   │   │   ├── knee_R_Link.STL
+│   │   │   ├── proximal_pitch_L_Link.STL
+│   │   │   ├── proximal_pitch_R_Link.STL
+│   │   │   ├── proximal_roll_L_Link.STL
+│   │   │   ├── proximal_roll_R_Link.STL
+│   │   │   ├── proximal_yaw_L_Link.STL
+│   │   │   ├── proximal_yaw_R_Link.STL
+│   │   │   ├── wheel_L_Link.STL
+│   │   │   └── wheel_R_Link.STL
+│   │   ├── urdf
+│   │   │   ├── robot_rl.urdf
+│   │   │   └── robot.urdf
+│   │   ├── usd
+│   │   │   ├── configuration
+│   │   │   │   ├── robot_base.usd
+│   │   │   │   ├── robot_physics.usd
+│   │   │   │   ├── robot_robot.usd
+│   │   │   │   └── robot_sensor.usd
+│   │   │   └── robot.usd
+│   │   ├── xacro
+│   │   │   ├── macros.xacro
+│   │   │   └── robot.urdf.xacro
+│   │   └── xml
+│   │       └── robot.xml
+│   └── WFYG_TRON2A
+│       ├── meshes
+│       │   ├── antenna_L_Link_collision_1.STL
+│       │   ├── antenna_L_Link_collision_2.STL
+│       │   ├── antenna_L_Link.STL
+│       │   ├── antenna_R_Link_collision_1.STL
+│       │   ├── antenna_R_Link_collision_2.STL
+│       │   ├── antenna_R_Link.STL
+│       │   ├── arm1_Link.STL
+│       │   ├── arm2_Link_collision1.STL
+│       │   ├── arm2_Link_collision2.STL
+│       │   ├── arm2_Link.STL
+│       │   ├── arm3_Link_collision1.STL
+│       │   ├── arm3_Link_collision2.STL
+│       │   ├── arm3_Link.STL
+│       │   ├── arm4_Link_collision1.STL
+│       │   ├── arm4_Link_collision2.STL
+│       │   ├── arm4_Link.STL
+│       │   ├── arm5_Link.STL
+│       │   ├── arm6_Link.STL
+│       │   ├── arm_base_Link.STL
+│       │   ├── base_Link.STL
+│       │   ├── camera_mount_Link.STL
+│       │   ├── gripper1_Link.STL
+│       │   ├── gripper2_Link.STL
+│       │   ├── gripper_base_Link_collision1.STL
+│       │   ├── gripper_base_Link_collision2.STL
+│       │   ├── gripper_base_Link.STL
+│       │   ├── knee_L_Link.STL
+│       │   ├── knee_R_Link.STL
+│       │   ├── proximal_pitch_L_Link.STL
+│       │   ├── proximal_pitch_R_Link.STL
+│       │   ├── proximal_roll_L_Link.STL
+│       │   ├── proximal_roll_R_Link.STL
+│       │   ├── proximal_yaw_L_Link.STL
+│       │   ├── proximal_yaw_R_Link.STL
+│       │   ├── radar_Link.STL
+│       │   ├── transition_Link_collision_1.STL
+│       │   ├── transition_Link_collision_2.STL
+│       │   ├── transition_Link.STL
+│       │   ├── wheel_L_Link.STL
+│       │   └── wheel_R_Link.STL
+│       ├── urdf
+│       │   ├── robot_rl.urdf
+│       │   └── robot.urdf
+│       ├── usd
+│       │   ├── configuration
+│       │   │   ├── robot_base.usd
+│       │   │   ├── robot_physics.usd
+│       │   │   ├── robot_robot.usd
+│       │   │   └── robot_sensor.usd
+│       │   └── robot.usd
+│       ├── xacro
+│       │   ├── macros.xacro
+│       │   └── robot.urdf.xacro
+│       └── xml
+│           └── robot.xml
+└── ver_tron2.py
+
+60 directories, 360 files
