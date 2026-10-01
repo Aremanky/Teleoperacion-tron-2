@@ -19,6 +19,7 @@ al cerrar la pinza junto a la pieza, esta pasa a moverse solidaria con la pinza.
 Todas las medidas estan en metros, en el marco del mundo del robot:
 x hacia delante del robot, y a su izquierda, z hacia arriba.
 """
+import os
 import xml.etree.ElementTree as ET
 
 import mujoco
@@ -47,9 +48,30 @@ TUBOS_TECHO = [
 CODOS_TECHO = [((0.42, 1.60, 1.55), R_TUBO)]
 SEPARACION_SOPORTES = 0.60
 
-MESA_CENTRO = (0.46, -0.22)
+MESA_CENTRO = (0.44, -0.05)     # centrada: la alcanzan los DOS brazos (antes 0.46, -0.22)
 MESA_MEDIO = (0.20, 0.24)        # semiancho en x, y
 MESA_ALTO = 0.95                 # altura del tablero
+
+# ---------------- PIEZA DE LA MESA ----------------------------------------------
+# Que pieza hay en la mesa. Se usa la primera opcion que no sea None:
+#   RUTA_XML_PIEZA   -> un cuerpo de un .xml de MuJoCo, con sus mallas y sus colores
+#                       (p.ej. el taladro del proyecto OrcaHand). RECOMENDADO.
+#   RUTA_MALLA_PIEZA -> un .obj / .stl suelto (se escala, se centra y se apoya solo)
+#   las dos a None   -> el codo de PVC de siempre
+RUTA_XML_PIEZA = "taladro/escena_taladro.xml"
+CUERPO_XML_PIEZA = "taladro"                 # cuerpo del .xml que es la pieza (con sus hijos)
+GEOM_AGARRE_XML = "taladro_col_empunadura"   # capsula por donde se coge (None = su eje mas largo)
+
+RUTA_MALLA_PIEZA = None          # p.ej. "modelos/mi_pieza.stl"
+ESCALA_MALLA = "auto"            # "auto": se escala para que su lado mas largo mida TAMANO_PIEZA
+                                 # o un numero: 0.001 si el archivo esta en mm, 1.0 si en metros
+TAMANO_PIEZA = 0.25              # m (solo con ESCALA_MALLA = "auto")
+COLOR_PIEZA = "0.95 0.45 0.10 1"
+
+GIRO_PIEZA = (0.0, 0.0, 0.0)     # grados alrededor de x, y, z: como queda en la mesa
+                                 # (taladro: (0, 0, 0) = de pie con la broca hacia delante;
+                                 #  (0, 0, 180) = broca hacia el robot)
+PIEZA_ENCAJA = None              # None = solo el codo de PVC se "instala" en el tubo del techo
 
 # Pieza suelta: origen en el codo. Tramo 1 por +y local, tramo 2 por -z local.
 EXTREMOS = [  # (punto local, direccion hacia fuera)
@@ -57,10 +79,41 @@ EXTREMOS = [  # (punto local, direccion hacia fuera)
     (np.array([0.0, 0.0, -L2]), np.array([0.0, 0.0, -1.0])),
 ]
 # Sobre la mesa, tumbada: tramo 1 hacia +y del mundo, tramo 2 hacia +x
-POS_INICIAL = np.array([0.34, -0.36, MESA_ALTO + R_COPA])
+POS_INICIAL = np.array([0.34, -0.12, MESA_ALTO + R_COPA])   # antes y = -0.36: fuera del alcance del brazo izquierdo
 ROT_INICIAL = np.array([[0.0, 0.0, -1.0],
                         [0.0, 1.0, 0.0],
                         [1.0, 0.0, 0.0]])
+
+
+def _leer_vertices(ruta):
+    """Vertices (N x 3) de un .obj o un .stl (binario o de texto), en sus unidades."""
+    if not os.path.exists(ruta):
+        raise FileNotFoundError(f"No encuentro el modelo de la pieza: {os.path.abspath(ruta)}")
+    ext = os.path.splitext(ruta)[1].lower()
+    if ext == ".obj":
+        with open(ruta, "r", errors="ignore") as f:
+            v = [[float(x) for x in linea.split()[1:4]] for linea in f if linea.startswith("v ")]
+        return np.array(v, dtype=float)
+    if ext == ".stl":
+        with open(ruta, "rb") as f:
+            datos = f.read()
+        n = int.from_bytes(datos[80:84], "little") if len(datos) >= 84 else -1
+        if len(datos) == 84 + 50 * n:                       # STL binario
+            tipo = np.dtype([("n", "<f4", 3), ("v", "<f4", (3, 3)), ("a", "<u2")])
+            return np.frombuffer(datos, dtype=tipo, count=n, offset=84)["v"].reshape(-1, 3).astype(float)
+        t = datos.decode(errors="ignore").split()           # STL de texto
+        return np.array([[float(t[i + 1]), float(t[i + 2]), float(t[i + 3])]
+                         for i, x in enumerate(t) if x == "vertex"], dtype=float)
+    raise ValueError(f"Formato no soportado para la pieza: {ext} (usa .obj o .stl)")
+
+
+def _rot_xyz(grados):
+    ax, ay, az = np.radians(grados)
+    Rx = np.array([[1, 0, 0], [0, np.cos(ax), -np.sin(ax)], [0, np.sin(ax), np.cos(ax)]])
+    Ry = np.array([[np.cos(ay), 0, np.sin(ay)], [0, 1, 0], [-np.sin(ay), 0, np.cos(ay)]])
+    Rz = np.array([[np.cos(az), -np.sin(az), 0], [np.sin(az), np.cos(az), 0], [0, 0, 1]])
+    return Rz @ Ry @ Rx
+
 
 # =============================== REGLAS ======================================
 D_AGARRE = 0.05          # m: distancia maxima de la pinza al eje del tubo para cogerlo
@@ -147,6 +200,164 @@ def _f(v):
     return " ".join(f"{x:.4f}" for x in v)
 
 
+# =============================== PIEZA PROPIA ================================
+def _quat_a_mat(q):
+    w, x, y, z = np.asarray(q, dtype=float) / np.linalg.norm(q)
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                     [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                     [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+
+
+def _vec(texto, defecto):
+    return np.array([float(x) for x in texto.split()]) if texto else np.array(defecto, dtype=float)
+
+
+def _esquinas(lo, hi):
+    return np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])])
+
+
+def _buscar_malla(fichero, base, carpeta_xml):
+    """Las rutas de un .xml pueden estar mal (p.ej. '/piezas/cuerpo.obj' o un .obj fuera
+    de su carpeta): se prueba tal cual, relativa al .xml y, si no, se busca por su nombre."""
+    for c in (os.path.join(base, fichero.lstrip("/\\")), fichero):
+        if os.path.isfile(c):
+            return os.path.abspath(c)
+    nombre = os.path.basename(fichero)
+    for raiz, _, archivos in os.walk(carpeta_xml):
+        if nombre in archivos:
+            return os.path.abspath(os.path.join(raiz, nombre))
+    raise FileNotFoundError(f"No encuentro la malla '{fichero}' de {RUTA_XML_PIEZA} "
+                            f"(buscada dentro de {carpeta_xml})")
+
+
+def _leer_pieza_xml(ruta, nombre_cuerpo, nombre_agarre):
+    """Lee un cuerpo de un .xml de MuJoCo y lo 'aplana' en un solo cuerpo: sus geoms
+    VISUALES (contype=0) con la pose relativa al cuerpo, sus mallas con la ruta ya
+    corregida, la caja que ocupa y el segmento por donde se coge.
+    Las articulaciones, inercias y geoms de colision se descartan: aqui no hay fisica."""
+    if not os.path.isfile(ruta):
+        raise FileNotFoundError(f"No encuentro {os.path.abspath(ruta)}")
+    root = ET.parse(ruta).getroot()
+    carpeta = os.path.dirname(os.path.abspath(ruta))
+    comp = root.find("compiler")
+    base = os.path.join(carpeta, comp.get("meshdir", "") if comp is not None else "")
+    mallas = {}
+    for m in root.iter("mesh"):
+        if m.get("file"):
+            atr = {k: v for k, v in m.attrib.items() if k != "class"}
+            nombre = atr.pop("name", os.path.splitext(os.path.basename(atr["file"]))[0])
+            atr["file"] = _buscar_malla(atr["file"], base, carpeta)
+            mallas[nombre] = atr
+
+    cuerpo = next((b for b in root.iter("body") if b.get("name") == nombre_cuerpo), None)
+    if cuerpo is None:
+        raise RuntimeError(f"{ruta} no tiene ningun <body name=\"{nombre_cuerpo}\">")
+
+    geoms, agarre = [], None
+
+    def pose(el):
+        for a in ("euler", "axisangle", "xyaxes", "zaxis"):
+            if el.get(a):
+                print(f"[aviso] {el.tag} '{el.get('name', '')}' usa '{a}': no soportado, se ignora su giro")
+        R = _quat_a_mat(_vec(el.get("quat"), (1, 0, 0, 0))) if el.get("quat") else np.eye(3)
+        return _vec(el.get("pos"), (0, 0, 0)), R
+
+    def recorrer(b, P, R):
+        nonlocal agarre
+        for h in b:
+            if h.tag == "geom":
+                gp, gR = pose(h)
+                Pg, Rg = P + R @ gp, R @ gR
+                ft = _vec(h.get("fromto"), ()) if h.get("fromto") else None
+                if ft is not None:
+                    ft = np.r_[P + R @ ft[:3], P + R @ ft[3:]]
+                if h.get("name") == nombre_agarre:
+                    if ft is not None:
+                        agarre = (ft[:3], ft[3:])
+                    else:   # capsula/cilindro a lo largo de su z local
+                        tam = _vec(h.get("size"), ())
+                        mitad = float(tam[1]) if len(tam) > 1 else 0.0
+                        agarre = (Pg - Rg[:, 2] * mitad, Pg + Rg[:, 2] * mitad)
+                if h.get("contype") == "0":                     # visual
+                    geoms.append(dict(tipo=h.get("type", "mesh" if h.get("mesh") else "sphere"),
+                                      malla=h.get("mesh"), size=h.get("size"), rgba=h.get("rgba"),
+                                      fromto=ft, P=Pg, R=Rg))
+            elif h.tag == "body":
+                bp, bR = pose(h)
+                recorrer(h, P + R @ bp, R @ bR)
+
+    recorrer(cuerpo, np.zeros(3), np.eye(3))
+    if not geoms:
+        raise RuntimeError(f"El cuerpo '{nombre_cuerpo}' no tiene geoms visuales (contype=\"0\")")
+
+    # caja que ocupa la pieza (con los vertices reales de las mallas)
+    puntos = []
+    for g in geoms:
+        if g["tipo"] == "mesh" and g["malla"] in mallas:
+            atr = mallas[g["malla"]]
+            v = _leer_vertices(atr["file"]) * _vec(atr.get("scale"), (1, 1, 1))
+            puntos.append(v @ g["R"].T + g["P"])
+        else:
+            r = float(np.max(_vec(g["size"], (0.01,))))
+            centro = [g["fromto"][:3], g["fromto"][3:]] if g["fromto"] is not None else [g["P"]]
+            puntos += [np.array([c - r, c + r]) for c in centro]
+    puntos = np.vstack(puntos)
+    return mallas, geoms, puntos.min(axis=0), puntos.max(axis=0), agarre
+
+
+def _apoyar_en_mesa(esquinas, R):
+    """Posicion para que la pieza (girada con R) quede apoyada y centrada en la mesa."""
+    centro = R @ esquinas.mean(axis=0)
+    z = MESA_ALTO - min(float((R @ c)[2]) for c in esquinas)
+    return np.array([MESA_CENTRO[0] - 0.06 - centro[0], MESA_CENTRO[1] - centro[1], z])
+
+
+PIEZA_XML = None          # (mallas, geoms) si la pieza sale de un .xml
+ESQUINAS_PIEZA = None     # 8 esquinas de la caja de la pieza (en sus coordenadas)
+SEGMENTO_AGARRE = None    # (a, b): por donde se coge (en sus coordenadas)
+ESCALA_REAL, MALLA_POS = 1.0, np.zeros(3)
+NOMBRE_PIEZA = "Tuberia"
+
+if RUTA_XML_PIEZA:
+    _mallas, _geoms, _lo, _hi, SEGMENTO_AGARRE = _leer_pieza_xml(
+        RUTA_XML_PIEZA, CUERPO_XML_PIEZA, GEOM_AGARRE_XML)
+    PIEZA_XML = (_mallas, _geoms)
+    NOMBRE_PIEZA = CUERPO_XML_PIEZA.replace("_", " ").capitalize()
+    ESQUINAS_PIEZA = _esquinas(_lo, _hi)
+    print(f"Pieza {NOMBRE_PIEZA} ({RUTA_XML_PIEZA}): {len(_geoms)} geoms, {len(_mallas)} mallas | "
+          f"mide {np.round((_hi - _lo) * 100, 1)} cm"
+          + ("" if SEGMENTO_AGARRE is not None else f" | sin '{GEOM_AGARRE_XML}': se coge por su eje mas largo"))
+elif RUTA_MALLA_PIEZA:
+    _v = _leer_vertices(RUTA_MALLA_PIEZA)
+    if len(_v) == 0:
+        raise ValueError(f"{RUTA_MALLA_PIEZA} no tiene vertices")
+    _lo, _hi = _v.min(axis=0), _v.max(axis=0)
+    _medidas = _hi - _lo
+    ESCALA_REAL = (TAMANO_PIEZA / max(float(_medidas.max()), 1e-12) if ESCALA_MALLA == "auto"
+                   else float(ESCALA_MALLA))
+    MALLA_POS = -(_lo + _hi) / 2 * ESCALA_REAL        # el centro de la caja va al origen de la pieza
+    _semi = _medidas * ESCALA_REAL / 2
+    ESQUINAS_PIEZA = _esquinas(-_semi, _semi)
+    NOMBRE_PIEZA = "Pieza"
+    print(f"Pieza propia {RUTA_MALLA_PIEZA}: {len(_v)} vertices | en el archivo mide "
+          f"{np.round(_medidas, 4)} (sus unidades) | escala {ESCALA_REAL:.5g} -> "
+          f"{np.round(2 * _semi * 100, 1)} cm")
+
+if ESQUINAS_PIEZA is not None:
+    if SEGMENTO_AGARRE is None:                       # se coge por su eje mas largo
+        _c = ESQUINAS_PIEZA.mean(axis=0)
+        _semi = (ESQUINAS_PIEZA.max(axis=0) - ESQUINAS_PIEZA.min(axis=0)) / 2
+        _u = np.eye(3)[int(np.argmax(_semi))] * _semi.max()
+        SEGMENTO_AGARRE = (_c - _u, _c + _u)
+    _a, _b = (np.asarray(x, dtype=float) for x in SEGMENTO_AGARRE)
+    SEGMENTO_AGARRE = (_a, _b)
+    EXTREMOS = [(_b, _unit(_b - _a)), (_a, _unit(_a - _b))]
+    ROT_INICIAL = _rot_xyz(GIRO_PIEZA)
+    POS_INICIAL = _apoyar_en_mesa(ESQUINAS_PIEZA, ROT_INICIAL)
+if PIEZA_ENCAJA is None:
+    PIEZA_ENCAJA = ESQUINAS_PIEZA is None
+
+
 # =============================== XML =========================================
 def anadir_al_modelo(root):
     """Anade el escenario al arbol XML del robot (se llama al cargar el modelo)."""
@@ -198,6 +409,37 @@ def anadir_al_modelo(root):
     # pieza suelta: cuerpo mocap (se coloca a mano desde Python en cada ciclo)
     pieza = ET.SubElement(mundo, "body", {"name": "tubo_suelto", "mocap": "true",
                                           "pos": _f(POS_INICIAL), "quat": _f(mat_a_quat(ROT_INICIAL))})
+    if PIEZA_XML is not None:      # pieza de un .xml (p.ej. el taladro): sus geoms visuales
+        mallas, geoms_xml = PIEZA_XML
+        asset = root.find("asset")
+        if asset is None:
+            asset = ET.SubElement(root, "asset")
+        for nombre, atr in mallas.items():
+            ET.SubElement(asset, "mesh", dict(atr, name="pieza_" + nombre))
+        for k, g in enumerate(geoms_xml):
+            # el nombre debe empezar por "tubo_suelto_" (asi la logica la reconoce)
+            kw = dict(name=f"tubo_suelto_{k}", type=g["tipo"], rgba=g["rgba"] or COLOR_PIEZA, mass="0")
+            if g["malla"]:
+                kw["mesh"] = "pieza_" + g["malla"]
+            if g["size"]:
+                kw["size"] = g["size"]
+            if g["fromto"] is not None:
+                kw["fromto"] = g["fromto"]
+            else:
+                kw["pos"], kw["quat"] = g["P"], mat_a_quat(g["R"])
+            geom(pieza, **kw)
+        return
+    if RUTA_MALLA_PIEZA:     # modelo propio: una malla en lugar de los cilindros
+        asset = root.find("asset")
+        if asset is None:
+            asset = ET.SubElement(root, "asset")
+        ET.SubElement(asset, "mesh", {"name": "pieza_propia",
+                                      "file": os.path.abspath(RUTA_MALLA_PIEZA),
+                                      "scale": _f([ESCALA_REAL] * 3)})
+        # el nombre debe empezar por "tubo_suelto_" (asi se pinta de verde al encajar)
+        geom(pieza, name="tubo_suelto_malla", type="mesh", mesh="pieza_propia",
+             pos=MALLA_POS, rgba=COLOR_PIEZA)
+        return
     geom(pieza, name="tubo_suelto_codo", type="sphere", pos=(0, 0, 0), size=R_COPA + 0.003, rgba=PVC_COPA)
     for k, (punto, eje) in enumerate(EXTREMOS):
         largo = np.linalg.norm(punto)
@@ -222,8 +464,26 @@ class EscenarioTuberias:
         self.g_pieza = [g for g in range(m.ngeom)
                         if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or "").startswith("tubo_suelto_")]
         self.rgba_pieza = m.geom_rgba[self.g_pieza].copy()
+        self._informar_malla()
         self.activa = False             # oculto y sin efecto hasta que se active
         self.reiniciar()
+
+    def _informar_malla(self):
+        """Con un modelo propio, imprime la caja que ocupa tal y como la ha cargado
+        MuJoCo, en las coordenadas de la pieza (comprobacion del centrado y la escala)."""
+        g = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_GEOM, "tubo_suelto_malla")
+        if g < 0:
+            return
+        mid = int(self.m.geom_dataid[g])
+        a, n = int(self.m.mesh_vertadr[mid]), int(self.m.mesh_vertnum[mid])
+        R = np.zeros(9)
+        mujoco.mju_quat2Mat(R, self.m.geom_quat[g])
+        v = self.m.mesh_vert[a:a + n] @ R.reshape(3, 3).T + self.m.geom_pos[g]
+        print(f"\nPieza propia ({RUTA_MALLA_PIEZA}): ocupa en sus coordenadas (m)\n"
+              f"   x [{v[:, 0].min():+.3f}, {v[:, 0].max():+.3f}]  "
+              f"y [{v[:, 1].min():+.3f}, {v[:, 1].max():+.3f}]  "
+              f"z [{v[:, 2].min():+.3f}, {v[:, 2].max():+.3f}]\n"
+              f"   (comprobacion: deberia salir centrada en 0 y con medidas de centimetros)\n")
 
     def activar(self, visor=None):
         """Muestra el escenario (o lo reinicia si ya estaba a la vista)."""
@@ -260,6 +520,9 @@ class EscenarioTuberias:
 
     # ---------------------------------------------------------------- geometria
     def _segmentos(self):
+        if SEGMENTO_AGARRE is not None:
+            a, b = SEGMENTO_AGARRE
+            return [(self.p + self.R @ a, self.p + self.R @ b)]
         return [(self.p, self.p + self.R @ punto) for punto, _ in EXTREMOS]
 
     def _mas_cercano(self, q):
@@ -289,11 +552,17 @@ class EscenarioTuberias:
 
     def _altura_apoyo(self):
         """Altura de la mesa si la pieza esta encima de ella; si no, el suelo."""
+        if ESQUINAS_PIEZA is not None:
+            c = self.p + self.R @ ESQUINAS_PIEZA.mean(axis=0)
+            dentro = (abs(c[0] - MESA_CENTRO[0]) < MESA_MEDIO[0] and abs(c[1] - MESA_CENTRO[1]) < MESA_MEDIO[1])
+            return MESA_ALTO if dentro else 0.0
         c = self.p + self.R @ (sum(p for p, _ in EXTREMOS) / (len(EXTREMOS) + 1))
         dentro = (abs(c[0] - MESA_CENTRO[0]) < MESA_MEDIO[0] and abs(c[1] - MESA_CENTRO[1]) < MESA_MEDIO[1])
         return MESA_ALTO if dentro else 0.0
 
     def _z_minima(self):
+        if ESQUINAS_PIEZA is not None:   # pieza propia: su caja, girada como este la pieza
+            return float(min((self.p + self.R @ c)[2] for c in ESQUINAS_PIEZA))
         puntos = [self.p] + [self.p + self.R @ p for p, _ in EXTREMOS]
         return min(q[2] for q in puntos) - R_COPA
 
@@ -353,7 +622,7 @@ class EscenarioTuberias:
                 self.p = brazo.punto_agarre() + Rg @ self.rel_p
                 self.R = Rg @ self.rel_R
 
-        if self.estado == "sujeta":
+        if self.estado == "sujeta" and PIEZA_ENCAJA:
             k, self.dist, self.ang = self._mejor_extremo()
             if self.dist < TOL_POS and self.ang < TOL_ANG:
                 self._encajar(k)
@@ -382,15 +651,15 @@ class EscenarioTuberias:
             return ""
         nombres = {"L": "IZQ", "R": "DER"}
         if self.estado == "instalada":
-            return "Tuberia: INSTALADA  (1 = empezar de nuevo)"
+            return f"{NOMBRE_PIEZA}: INSTALADA  (1 = empezar de nuevo)"
         if self.estado == "sujeta":
-            s = f"Tuberia: en pinza {nombres[self.sujeta]}"
+            s = f"{NOMBRE_PIEZA}: en la mano {nombres[self.sujeta]}"
             if self.dist is not None:
                 s += f" | conexion a {self.dist * 100:4.1f} cm, {self.ang:3.0f} deg"
                 s += f" (encaja < {TOL_POS * 100:.0f} cm y < {TOL_ANG:.0f} deg)"
             return s
         if self.estado == "cayendo":
-            return "Tuberia: cayendo"
+            return f"{NOMBRE_PIEZA}: cayendo"
         if self.estado == "suelo":
-            return "Tuberia: se ha caido al suelo, vuelve a la mesa..."
-        return "Tuberia: en la mesa  (cierra la mano junto a ella para cogerla)"
+            return f"{NOMBRE_PIEZA}: se ha caido al suelo, vuelve a la mesa..."
+        return f"{NOMBRE_PIEZA}: en la mesa  (cierra la mano junto a ella para cogerla)"

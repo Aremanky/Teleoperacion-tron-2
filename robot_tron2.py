@@ -79,6 +79,10 @@ VEL_TRANSICION = 1.5   # rad/s: al cambiar a otra solucion tras un rescate
 MARGEN_LIMITE = 0.1    # rad: junto a un limite se empuja la articulacion hacia dentro
 ERROR_ATASCO = 0.08    # m: error a partir del cual se considera que el brazo esta atascado
 T_ATASCO = 0.5         # s: tiempo atascado antes de buscar otra solucion
+MEJORA_MIN = 0.05      # m/s: si el error baja mas rapido que esto, el brazo NO esta atascado
+                       #      (solo va alcanzando un objetivo que ha saltado): no hay rescate
+T_TRANSICION_MAX = 2.0 # s: una transicion de rescate nunca dura mas que esto
+CANCELA_TRANSICION = 0.10  # m: si el objetivo se mueve esto durante la transicion, se cancela
 
 
 def nombre(m, tipo, i):
@@ -192,6 +196,8 @@ class Brazo:
         self.j_giro = max(self.j_muneca, key=lambda j: abs(np.dot(d.xaxis[j], antebrazo)))
         self.i_giro = self.juntas.index(self.j_giro)
         self.i_rigidas = [self.juntas.index(j) for j in self.j_muneca if j != self.j_giro]
+        self.i_muneca = [self.juntas.index(j) for j in self.j_muneca]
+        self.err_ant, self.obj_rescate = 0.0, None
         self.giro_obj = None
         self.q_transicion = None
         self.t_atascado, self.t_rescate = 0.0, -1e9
@@ -487,7 +493,14 @@ class Brazo:
         if self.q_transicion is not None:
             q = self.d.qpos[self.qadr].copy()
             falta = self.q_transicion - q
-            if np.abs(falta).max() < 0.02:
+            # La muneca NO entra en la transicion: la controla mover_muneca() en cada ciclo.
+            # (Antes si entraba: los dos tiraban de ella hacia valores distintos, 'falta'
+            # nunca bajaba de 0.02 y el brazo se quedaba congelado para siempre.)
+            falta[self.i_muneca] = 0.0
+            caducada = ahora - self.t_rescate > T_TRANSICION_MAX
+            movido = (self.obj_rescate is not None
+                      and np.linalg.norm(obj_m - self.obj_rescate) > CANCELA_TRANSICION)
+            if np.abs(falta).max() < 0.02 or caducada or movido:
                 self.q_transicion = None
             else:
                 self._fijar(q + np.clip(falta, -VEL_TRANSICION * dt, VEL_TRANSICION * dt))
@@ -496,12 +509,18 @@ class Brazo:
 
         ec, em, eo = self.resolver(obj_c, obj_m, R_obj, w_codo, max_cambio=VEL_MAX * dt)
         err = float(np.hypot(w_codo * ec, em))   # solo posicion
-        self.t_atascado = self.t_atascado + dt if err > ERROR_ATASCO else 0.0
+        # Atascado = error grande Y que no baja. Si baja, el brazo solo va alcanzando un
+        # objetivo que ha saltado y lo mejor es dejarle seguir (antes se rescataba igual).
+        mejora = self.err_ant - err
+        self.err_ant = err
+        atascado = err > ERROR_ATASCO and mejora < MEJORA_MIN * dt
+        self.t_atascado = self.t_atascado + dt if atascado else 0.0
         if self.t_atascado > T_ATASCO and ahora - self.t_rescate > 1.0:
             self.t_rescate, self.t_atascado = ahora, 0.0
             q_mejor, err_mejor = self._rescate(obj_c, obj_m, None, w_codo)
             if err_mejor < 0.5 * err:
                 self.q_transicion = q_mejor
+                self.obj_rescate = np.array(obj_m, dtype=float)
         return ec, em, eo
 
     def _rescate(self, obj_c, obj_m, R_obj, w_codo):
@@ -525,6 +544,7 @@ class Brazo:
             if err < mejor_err:
                 mejor_q, mejor_err = self.d.qpos[self.qadr].copy(), err
         self._fijar(q_act)
+        mejor_q[self.i_muneca] = q_act[self.i_muneca]   # la muneca se queda como esta
         return mejor_q, mejor_err
 
 
@@ -567,7 +587,7 @@ class RobotTron2:
     def reposo(self):
         for b in self.brazos.values():
             b.reposo()
-            b.q_transicion, b.t_atascado = None, 0.0
+            b.q_transicion, b.t_atascado, b.err_ant = None, 0.0, 0.0
         self.actualizar()
 
     def resumen(self):

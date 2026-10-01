@@ -147,7 +147,7 @@ class SeguidorManos:
         ref = {}
         if lm2d_pose is not None:
             for lado, i in (("L", 15), ("R", 16)):
-                if lm2d_pose[i][2] >= 0.5:
+                if lm2d_pose[i][2] >= 0.35:
                     ref[lado] = np.array(lm2d_pose[i][:2])
 
         candidatos = []

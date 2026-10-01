@@ -12,6 +12,8 @@ Fuente de los puntos 3D (se muestra en la ventana):
   "mixta":       profundidad en el hombro; en codo/muneca, donde la OAK-D no da
                  un valor coherente, se usa la profundidad relativa de MediaPipe
   "mediapipe3d": solo coordenadas 3D de MediaPipe (sin OAK-D o sin dato en el hombro)
+  "... codo tapado": el codo no se ve (brazo apuntando a la camara). Se toma el
+                 brazo como RECTO, de hombro a muneca, en vez de perderlo.
 
 HiloSeguimiento ejecuta camara + MediaPipe en segundo plano para que el bucle
 del robot vaya a su ritmo aunque el seguimiento sea mas lento.
@@ -34,9 +36,13 @@ CONEXIONES = {(11, 12): None, (11, 23): None, (12, 24): None, (23, 24): None,
               (11, 13): "L", (13, 15): "L", (12, 14): "R", (14, 16): "R"}
 COLOR_LADO = {"L": (255, 170, 0), "R": (0, 140, 255)}  # BGR: azul (izq), naranja (der)
 
-VIS_MIN = 0.5                     # visibilidad minima de un landmark
+# Visibilidad minima de un landmark. Con 0.5 el brazo se descartaba al levantarlo o
+# al estirarlo hacia la camara (el hombro y el codo bajan de 0.5 aunque se vean).
+# 0.35 es el valor que funciono en el proyecto OrcaHand (POSE_VISIBILIDAD_MIN).
+VIS_MIN = 0.35
 RANGO_BRAZO = (0.15, 0.50)        # m, longitudes plausibles para aceptar
 RANGO_ANTEBRAZO = (0.12, 0.45)    # la lectura de profundidad
+RANGO_HOMBRO_MUNECA = (0.15, 0.85)  # m, idem cuando el codo esta tapado
 TOL_Z = 0.20                      # m: diferencia maxima entre la profundidad de la OAK-D
                                   #    y la que predice MediaPipe para fiarse de la OAK-D
 FILTRO_MIN_CUTOFF = 0.8           # Hz: mas bajo = menos temblor en reposo
@@ -133,17 +139,25 @@ class SeguidorBrazos:
                                                     mundo[11].z - mundo[12].z]))
 
         for lado, idx in PUNTOS.items():
-            if min(vis(lm[i]) for i in idx) < VIS_MIN:
-                continue
+            v_hombro, v_codo, v_muneca = (vis(lm[i]) for i in idx)
+            if v_hombro < VIS_MIN or v_muneca < VIS_MIN:
+                continue                       # sin hombro o sin muneca no hay brazo
+            codo_tapado = v_codo < VIS_MIN     # tipico con el brazo apuntando a la camara
             pts, fuente = None, None
             if self.usar_profundidad and depth is not None and K is not None and mundo is not None:
-                pts, fuente = self._puntos_fusion(lm, mundo, idx, depth, K, w, h)
+                pts, fuente = self._puntos_fusion(lm, mundo, idx, depth, K, w, h, codo_tapado)
             if pts is None and mundo is not None:
                 pts = [np.array([mundo[i].x, mundo[i].y, mundo[i].z]) for i in idx]
                 fuente = "mediapipe3d"
             if pts is None:
                 continue
-            d_b, d_a = unitario(pts[1] - pts[0]), unitario(pts[2] - pts[1])
+            if codo_tapado:
+                # El codo que da MediaPipe es inventado: brazo recto de hombro a muneca.
+                # (El teleop ignora el codo con el brazo recto, asi que solo manda la muneca.)
+                d_b = d_a = unitario(pts[2] - pts[0])
+                fuente += " codo tapado"
+            else:
+                d_b, d_a = unitario(pts[1] - pts[0]), unitario(pts[2] - pts[1])
             if d_b is None or d_a is None:
                 continue
             f_b, f_a = self.filtros[lado]
@@ -152,11 +166,12 @@ class SeguidorBrazos:
                             "fuente": fuente}
         return brazos
 
-    def _puntos_fusion(self, lm, mundo, idx, depth, K, w, h):
+    def _puntos_fusion(self, lm, mundo, idx, depth, K, w, h, codo_tapado=False):
         """Pixel (u, v) de MediaPipe + profundidad. El hombro (sobre el torso) da la
         profundidad de referencia. En codo y muneca se usa la de la OAK-D si es
         coherente con la que predice MediaPipe; si no, la prediccion. Asi un pixel
-        sin dato no hace saltar de fuente a todo el brazo."""
+        sin dato no hace saltar de fuente a todo el brazo.
+        Con el codo tapado solo se comprueba la distancia hombro-muneca."""
         fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
         uv = [(lm[i].x * w, lm[i].y * h) for i in idx]
         z_hombro = profundidad_en(depth, *uv[0])
@@ -173,9 +188,14 @@ class SeguidorBrazos:
                 else:
                     z = z_pred
             pts.append(np.array([(u - cx) * z / fx, (v - cy) * z / fy, z]))
-        l_b, l_a = np.linalg.norm(pts[1] - pts[0]), np.linalg.norm(pts[2] - pts[1])
-        if not (RANGO_BRAZO[0] < l_b < RANGO_BRAZO[1] and RANGO_ANTEBRAZO[0] < l_a < RANGO_ANTEBRAZO[1]):
-            return None, None
+        if codo_tapado:
+            l_hm = np.linalg.norm(pts[2] - pts[0])
+            if not RANGO_HOMBRO_MUNECA[0] < l_hm < RANGO_HOMBRO_MUNECA[1]:
+                return None, None
+        else:
+            l_b, l_a = np.linalg.norm(pts[1] - pts[0]), np.linalg.norm(pts[2] - pts[1])
+            if not (RANGO_BRAZO[0] < l_b < RANGO_BRAZO[1] and RANGO_ANTEBRAZO[0] < l_a < RANGO_ANTEBRAZO[1]):
+                return None, None
         return pts, ("profundidad" if n_oak == 2 else "mixta")
 
 
