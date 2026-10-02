@@ -48,7 +48,7 @@ TUBOS_TECHO = [
 CODOS_TECHO = [((0.42, 1.60, 1.55), R_TUBO)]
 SEPARACION_SOPORTES = 0.60
 
-MESA_CENTRO = (0.44, -0.05)     # centrada: la alcanzan los DOS brazos (antes 0.46, -0.22)
+MESA_CENTRO = (0.8, -0.22)     # centrada: la alcanzan los DOS brazos (antes 0.46, -0.22)
 MESA_MEDIO = (0.20, 0.24)        # semiancho en x, y
 MESA_ALTO = 0.95                 # altura del tablero
 

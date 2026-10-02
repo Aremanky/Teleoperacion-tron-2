@@ -44,6 +44,16 @@
 		<mesh name="left_I-PP_Skin" file="models/assets/left/I-PP_Skin.stl" />
 		<mesh name="left_M-IP_IP" file="models/assets/left/M-IP_IP.stl" />
 		<mesh name="left_M-FingerTipAssembly_M-DP-Skin" file="models/assets/left/M-FingerTipAssembly_M-DP-Skin.stl" />
+
+		<material name="azul_personalizado" rgba="0.0 0.278 0.6 1.0" />
+		<material name="naranja_personalizado" rgba="1.0 0.498 0.0 1.0" />
+
+		<!-- Logo Elecnor en el dorso de la mano -->
+		<texture name="logo_elecnor" type="2d" file="models/assets/Logo_Elecnor_AZUL.png" />
+		<material name="logo_elecnor_material" texture="logo_elecnor" texuniform="false" rgba="1 1 1 1" />
+		<!-- Autores de la mano -->
+		<texture name="tex_nombres" type="2d" file="models/assets/Nombres_Naranja.png" />
+		<material name="mat_nombres" texture="tex_nombres" texuniform="false" rgba="1 1 1 1" emission="1.0" />
 	</asset>
 	<actuator>
 		<position name="left_wrist_actuator" joint="left_wrist" ctrlrange="-1.1344640137963142 0.6108652381980153" />
