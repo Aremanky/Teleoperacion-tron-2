@@ -1,7 +1,8 @@
 """
 Fuentes de imagen para la teleoperacion.
 
-CamaraOAK    -> OAK-D con DepthAI v3: imagen RGB + profundidad alineada al RGB (mm)
+CamaraOAK    -> OAK-D con DepthAI v3: imagen RGB + profundidad alineada al RGB (mm) + copia HD
+                del mismo fotograma (bgr_hd, 1280x960) para recortar las manos con mas pixeles
                 y, si la camara tiene IMU, gravedad y deteccion de movimientos.
                 En las OAK-D Pro enciende el proyector de puntos IR (estereo activo):
                 da textura a la piel y a la ropa lisa y la profundidad de los brazos
@@ -240,18 +241,42 @@ def _cola(salida, max_size):
 
 class CamaraOAK:
     def __init__(self, ancho=640, alto=480, fps=30, mxid=None, usar_imu=True, proyector=0.7,
-                 estereo_fino=True):
+                 estereo_fino=True, hd=True, ancho_hd=1280, alto_hd=960):
         """proyector: intensidad 0..1 del proyector de puntos IR (solo modelos Pro). 0 = apagado.
         estereo_fino: subpixel + comprobacion izquierda/derecha en el propio estereo
-        (sin filtro de mediana: con subpixel la disparidad maxima supera lo que admite y el firmware lo desactiva)
-        (profundidad mucho menos ruidosa, que es lo que limita la precision hacia delante)."""
+        (profundidad mucho menos ruidosa, que es lo que limita la precision hacia delante).
+        hd: ademas del fotograma de ancho x alto (MediaPipe Pose, profundidad, ventana), pide
+        al ISP el MISMO fotograma a ancho_hd x alto_hd, sincronizado, para recortar las manos
+        con mas pixeles (self.bgr_hd). Misma relacion de aspecto y misma correccion de
+        distorsion: la imagen HD es la de 640 escalada x2. Si la camara no lo admite
+        (USB2, ISP sin recursos) se reintenta sin HD."""
         import depthai as dai  # DepthAI v3  (pip install "depthai>=3")
 
         self.dai = dai
         self.K = None
         self.mxid = mxid
         self.t_captura = None
+        self.bgr_hd = None
+        self.hd = bool(hd)
         self.imu, self.cola_imu = None, None
+        self._args = dict(ancho=ancho, alto=alto, fps=fps, usar_imu=usar_imu, proyector=proyector,
+                          estereo_fino=estereo_fino, ancho_hd=ancho_hd, alto_hd=alto_hd)
+        try:
+            self._construir(**self._args, hd=self.hd)
+        except Exception as e:
+            if not self.hd:
+                raise
+            print(f"[{mxid or 'OAK'}] no puedo abrir la camara con la salida HD ({e}): reintento sin HD")
+            self.hd = False
+            try:
+                if getattr(self, "pipeline", None) is not None:
+                    self.pipeline.stop()
+            except Exception:
+                pass
+            self._construir(**self._args, hd=False)
+
+    def _construir(self, ancho, alto, fps, usar_imu, proyector, estereo_fino, ancho_hd, alto_hd, hd):
+        dai, mxid = self.dai, self.mxid
         if mxid is None:   # comportamiento de siempre: la primera OAK libre
             self.pipeline = dai.Pipeline()
         else:              # una OAK concreta (necesario con dos camaras)
@@ -276,6 +301,9 @@ class CamaraOAK:
         cam_izq.requestOutput(size=(640, 400), fps=fps).link(stereo.left)
         cam_der.requestOutput(size=(640, 400), fps=fps).link(stereo.right)
         salida_rgb.link(sync.inputs["rgb"])
+        if hd:
+            salida_hd = cam_rgb.requestOutput(size=(ancho_hd, alto_hd), fps=fps, enableUndistortion=True)
+            salida_hd.link(sync.inputs["rgb_hd"])
 
         if plataforma == dai.Platform.RVC4:
             alinear = self.pipeline.create(dai.node.ImageAlign)
@@ -291,6 +319,15 @@ class CamaraOAK:
         if usar_imu:
             self._crear_imu(dispositivo)
         self.pipeline.start()
+        if hd:   # comprobar que de verdad llegan los tres fotogramas
+            grupo = self.cola.get()
+            try:
+                hd_ok = grupo is not None and grupo["rgb_hd"] is not None
+            except Exception:
+                hd_ok = False
+            if not hd_ok:
+                raise RuntimeError("el Sync no entrega la salida HD")
+            print(f"[{mxid or 'OAK'}] salida HD {ancho_hd}x{alto_hd} activa para las manos")
         if proyector > 0:
             try:   # en DepthAI v3 se fija con el pipeline ya arrancado
                 dispositivo.setIrLaserDotProjectorIntensity(float(proyector))
@@ -381,6 +418,11 @@ class CamaraOAK:
         self.t_captura = self._instante_captura(f_rgb)
         bgr = f_rgb.getCvFrame()
         depth = f_depth.getFrame()
+        if self.hd:
+            try:
+                self.bgr_hd = grupo["rgb_hd"].getCvFrame()
+            except Exception:
+                self.bgr_hd = None
         if depth.shape[:2] != bgr.shape[:2]:
             depth = cv2.resize(depth, (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
         if self.K is None:
@@ -405,19 +447,26 @@ class CamaraOAK:
 
 
 class CamaraWebcam:
-    def __init__(self, indice=0):
+    def __init__(self, indice=0, ancho=640, alto=480):
         self.cap = cv2.VideoCapture(indice)
         if not self.cap.isOpened():
             raise RuntimeError(f"No puedo abrir la webcam {indice}")
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.ancho, self.alto = ancho, alto
         self.K = None
         self.imu = None
         self.t_captura = None
+        self.bgr_hd = None   # si la webcam da mas de 640x480, la imagen completa hace de HD
 
     def leer(self):
         ok, bgr = self.cap.read()
         self.t_captura = time.monotonic()
-        return (bgr if ok else None), None
+        if not ok:
+            return None, None
+        if bgr.shape[1] > self.ancho:
+            self.bgr_hd = bgr
+            bgr = cv2.resize(bgr, (self.ancho, self.alto), interpolation=cv2.INTER_AREA)
+        return bgr, None
 
     def cerrar(self):
         self.cap.release()

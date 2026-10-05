@@ -1,48 +1,31 @@
 """
-Retargeting de la mano: landmarks 3D → data.ctrl[] de la OrcaHand.
+Retargeting de la mano: landmarks 3D → ctrl[] de la OrcaHand (17 valores).
 
-(Extraído de Skill_Shield_Nivel_6.py — código sin cambios, solo reubicado.)
+Origen: Skill_Shield_Nivel_6.py del proyecto OrcaHand/ARCTOS. Cambios para el TRON 2:
+  - importa de config_mano.py (no de config.py);
+  - IMITACION_PURA (estado["pinza_habilitada"] = False): los dedos copian a los tuyos y
+    NO se sustituyen por las posturas de pinza predefinidas (PINZA_CTRL_CONTACTO);
+  - el suavizado de dedos es un One Euro (suavizado.FiltroDedos) en vez de una media movil;
+  - fuera la comprobacion de contacto yema-pulgar por nombres de cuerpo (con los prefijos
+    orcaL_/orcaR_ nunca encontraba nada) y el print de depuracion por datos.time.
 """
 import numpy as np
-import mujoco
 
-from config import *
-from config import _UMBRAL_COMBO2_OFF, _UMBRAL_COMBO2_ON, _UMBRAL_COMBO3_OFF, _UMBRAL_COMBO3_ON, _UMBRAL_COMBO_OFF, _UMBRAL_COMBO_ON
-
-from suavizador import SuavizadorND
+from config_mano import (FUERZA_ABD, FUERZA_NUDILLOS, FUERZA_PUNTAS, GANANCIA_DEDOS, LIMITES_CTRL, N_ACT,
+                         OFFSET_MANO, PINZA_DIST_MAX, PINZA_UMBRAL_OFF, PINZA_UMBRAL_ON, PULGAR_GANANCIA_IP,
+                         PULGAR_GANANCIA_MCP, PUNO_COLECTIVO, UMBRAL_BLOQUEO, UMBRAL_EXT_PULGAR_IP,
+                         UMBRAL_EXT_PULGAR_MCP, UMBRAL_LIBERACION, UMBRAL_PUNO)
+from config_mano import (UMBRAL_COMBO2_OFF as _UMBRAL_COMBO2_OFF, UMBRAL_COMBO2_ON as _UMBRAL_COMBO2_ON,
+                         UMBRAL_COMBO3_OFF as _UMBRAL_COMBO3_OFF, UMBRAL_COMBO3_ON as _UMBRAL_COMBO3_ON,
+                         UMBRAL_COMBO_OFF as _UMBRAL_COMBO_OFF, UMBRAL_COMBO_ON as _UMBRAL_COMBO_ON)
 from biomecanica import calcular_abertura, calcular_distancia, calcular_flexion, calcular_flexion_muneca
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RETARGETING: LANDMARKS 3D → data.ctrl[]
+# RETARGETING: LANDMARKS 3D → ctrl[]
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Bodies de yema por dedo (nombres exactos del MJCF) ───────────────────────
-_BODY_YEMA = {
-    "indice":  "right_I-FingerTipAssembly_ec49c16c",
-    "corazon": "right_M-FingerTipAssembly_34afb748",
-    "anular":  "right_M-FingerTipAssembly_424a8e75",
-    "menique": "right_P-FingerTipAssembly_cd219176",
-}
-_BODY_PULGAR_YEMA = "right_T-DP_b7429e50"
-
-def hay_contacto_yema(modelo: mujoco.MjModel, datos: mujoco.MjData,
-                      dedo: str) -> bool:
-    """True si la falange distal del pulgar toca la del dedo indicado."""
-    id_pulgar = mujoco.mj_name2id(modelo, mujoco.mjtObj.mjOBJ_BODY, _BODY_PULGAR_YEMA)
-    id_dedo   = mujoco.mj_name2id(modelo, mujoco.mjtObj.mjOBJ_BODY, _BODY_YEMA[dedo])
-    for i in range(datos.ncon):
-        c  = datos.contact[i]
-        b1 = modelo.geom_bodyid[c.geom1]
-        b2 = modelo.geom_bodyid[c.geom2]
-        if (b1 == id_pulgar and b2 == id_dedo) or \
-           (b1 == id_dedo   and b2 == id_pulgar):
-            return True
-    return False
-
-def retarget_a_ctrl(modelo: mujoco.MjModel, datos: mujoco.MjData,
-                    lm3d: list, hand_world_lm, estado: dict,
-                    suav_dedos: SuavizadorND) -> dict:
+def retarget_a_ctrl(modelo, datos, lm3d: list, hand_world_lm, estado: dict, suav_dedos) -> dict:
     """
     Calcula y escribe datos.ctrl[0..N_ACT-1] a partir de landmarks 3D.
 
@@ -269,8 +252,7 @@ def retarget_a_ctrl(modelo: mujoco.MjModel, datos: mujoco.MjData,
     # Compensa la oclusión de MediaPipe: al cerrar el puño las yemas del anular
     # y meñique desaparecen de la vista y MediaPipe los pierde.
     # El suavizador se reduce a ventana=1 (sin dilución) durante el puño.
-    UMBRAL_PUNO = 0.60   # umbral más bajo para detectar antes el intento de puño
-    en_puno = ctrl_raw[11] > UMBRAL_PUNO or ctrl_raw[5] > UMBRAL_PUNO
+    en_puno = PUNO_COLECTIVO and (ctrl_raw[11] > UMBRAL_PUNO or ctrl_raw[5] > UMBRAL_PUNO)
     if en_puno:
         suav_dedos.set_ventana(1)   # sin suavizado: el cierre llega al máximo
         factor = max(
@@ -363,17 +345,6 @@ def retarget_a_ctrl(modelo: mujoco.MjModel, datos: mujoco.MjData,
     ctrl_raw[1:] = suav_dedos.actualizar(ctrl_raw[1:])
 
     # — 7. Clip de seguridad anatómica —
-    # Debug throttled: imprime todos los dedos cada ~0.5 s sin bloquear el bucle
-    if estado["camara_activa"] and (int(datos.time * 2) % 1 == 0) and \
-       abs(datos.time * 2 - int(datos.time * 2)) < 0.03:
-        print(
-            f"[CTRL] "
-            f"MNQ {ctrl_raw[2]:.2f}/{ctrl_raw[3]:.2f} | "
-            f"ANU {ctrl_raw[5]:.2f}/{ctrl_raw[6]:.2f} | "
-            f"COR {ctrl_raw[8]:.2f}/{ctrl_raw[9]:.2f} | "
-            f"IND {ctrl_raw[11]:.2f}/{ctrl_raw[12]:.2f} | "
-            f"PUNO={'SI' if en_puno else 'no'}"
-        )
     for i, (lo, hi) in enumerate(LIMITES_CTRL):
         ctrl_mano[i] = float(np.clip(ctrl_raw[i], lo, hi))
 
@@ -485,26 +456,7 @@ def retarget_a_ctrl(modelo: mujoco.MjModel, datos: mujoco.MjData,
         for idx, val in PINZA_CTRL_CONTACTO[dedo_activo].items():
             lo, hi = LIMITES_CTRL[idx]
             ctrl_mano[idx] = float(np.clip(val, lo, hi))
-        # Para pinzas multi-dedo se verifica contacto en cualquiera de los dedos
-        if dedo_activo == "corazon_anular":
-            estado["pinza_tocando"] = (
-                hay_contacto_yema(modelo, datos, "corazon") or
-                hay_contacto_yema(modelo, datos, "anular")
-            )
-        elif dedo_activo == "indice_corazon":
-            estado["pinza_tocando"] = (
-                hay_contacto_yema(modelo, datos, "indice") or
-                hay_contacto_yema(modelo, datos, "corazon")
-            )
-        elif dedo_activo == "anular_menique":
-            estado["pinza_tocando"] = (
-                hay_contacto_yema(modelo, datos, "anular") or
-                hay_contacto_yema(modelo, datos, "menique")
-            )
-        else:
-            estado["pinza_tocando"] = hay_contacto_yema(modelo, datos, dedo_activo)
-    else:
-        estado["pinza_tocando"] = False
+    estado["pinza_tocando"] = False   # (sin fisica no hay contactos que comprobar)
 
     estado["pinza_previa"]  = modo_pinza
     estado["calc_muneca"]   = calc_muneca

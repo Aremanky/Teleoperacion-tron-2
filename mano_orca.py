@@ -7,12 +7,14 @@ Que hay aqui:
   ManoOrca                -> usa el MISMO retargeting del proyecto OrcaHand (retarget_a_ctrl) y
                              escribe el resultado directamente en qpos (sin fisica, como los brazos)
 
-Archivos a copiar del proyecto OrcaHand a la carpeta del TRON 2:
-  config.py, biomecanica.py, retargeting.py y skill_shield/comun/suavizador.py
-  + la carpeta orcahand_description-main/v2/models (mjcf y assets)
-En retargeting.py cambiar las dos importaciones de skill_shield por:
-  from suavizador import SuavizadorND
-  from biomecanica import calcular_abertura, calcular_distancia, calcular_flexion, calcular_flexion_muneca
+Archivos que necesita (ya en esta carpeta): config_mano.py, biomecanica.py, retargeting.py,
+suavizado.py y orcahand_description-main/v2/models (mjcf y assets).
+
+ORIENTACION (oct-2026): cada ManoOrca publica el MARCO SEMANTICO de su palma (dedos, ancho
+de la palma del indice al menique, normal), construido con los anclajes de las juntas MCP
+igual que SeguidorManos.marco() lo construye con los landmarks de MediaPipe. La IK del
+brazo (robot_tron2.Brazo) orienta la palma del robot como la del operador comparando esos
+dos marcos.
 
 Prueba rapida del montaje (sin camara, las manos abren y cierran solas):
   python mano_orca.py tron2a/DACH_TRON2A/xml/robot_elecnor.xml
@@ -27,10 +29,11 @@ import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 
-from config import LIMITES_CTRL, N_ACT, OFFSET_MANO, POSICION_STANDBY, TALADRO_DEMO_MANO_AGARRE
+from config_mano import (DEDOS_FILTRO_BETA, DEDOS_FILTRO_MIN_CUTOFF, IMITACION_PURA, LIMITES_CTRL,
+                         MANO_CERRADA_CTRL, N_ACT, OFFSET_MANO, POSICION_STANDBY)
 from retargeting import retarget_a_ctrl
-from suavizador import SuavizadorND
-from suavizado import suavizar
+from robot_tron2 import marco_semantico
+from suavizado import FiltroDedos, suavizar
 
 # ============================== AJUSTES ======================================
 ORCA_MJCF = "orcahand_description-main/v2/models/mjcf"
@@ -53,9 +56,16 @@ MONTAJE = {"L": dict(pos=None, quat=None),
 #   dedos="antebrazo" -> la torre de la Orca sigue la linea del antebrazo del TRON 2
 #                        (la mano parece parte del brazo)
 #   dedos=[0, 0, -1]  -> los dedos apuntan exactamente hacia abajo en el mundo
-# La palma mira lo mas parecido posible a 'palma' sin dejar de cumplir lo de los dedos.
+# La palma mira lo mas parecido posible a 'palma' (un vector, o un dict por lado) sin dejar
+# de cumplir lo de los dedos.
+# IMPORTANTE (oct-2026): la palma en reposo mira hacia el CUERPO (como una mano humana relajada,
+# que es la postura de calibracion [c]), no hacia atras. La muneca del TRON 2 tiene poco
+# recorrido (giro del antebrazo -100/+80 grados, flexion +-45, lateral +-90): con la palma
+# montada hacia atras, solo igualar la postura neutra del operador ya gastaba 90 grados de
+# giro y la mitad de las orientaciones quedaban fuera de alcance (prueba_ik.py lo mide).
+# Para volver a la mano hacia atras: palma={"L": [-1, 0, 0], "R": [-1, 0, 0]}.
 ORIENTACION_MANO = dict(dedos="antebrazo",
-                        palma=[-1.0, 0.0, 0.0])   # palma hacia atras
+                        palma={"L": [0.0, -1.0, 0.0], "R": [0.0, 1.0, 0.0]})   # palma hacia el cuerpo
 
 VEL_DEDOS = 8.0          # rad/s maximos de cada junta (quita tirones entre fotogramas)
 OMEGA_DEDOS = 16.0       # rad/s del muelle amortiguado de los dedos (mas alto = mas rapido, menos suave).
@@ -70,7 +80,7 @@ TOPE_TUBO = 1.0          # rad: con el tubo cogido los dedos no cierran mas (no 
 # Posturas para el modo sencillo (sin landmarks de los dedos): se mezclan con la apertura
 MANO_ABIERTA = np.array(POSICION_STANDBY, dtype=float)
 MANO_CERRADA = MANO_ABIERTA.copy()
-for _i, _v in TALADRO_DEMO_MANO_AGARRE.items():   # agarre ya calibrado en el proyecto OrcaHand
+for _i, _v in MANO_CERRADA_CTRL.items():   # agarre ya calibrado en el proyecto OrcaHand
     MANO_CERRADA[_i] = _v
 
 SECCIONES_CON_REFERENCIAS = ("equality", "actuator", "contact", "sensor", "tendon")
@@ -445,7 +455,10 @@ def montar_manos(ruta_xml, carpeta_orca=ORCA_MJCF):
             palma = _palma(m, d, lado)
             dedos_obj = ORIENTACION_MANO["dedos"]
             e_obj = _antebrazo(m, d, lado)[0] if isinstance(dedos_obj, str) else np.asarray(dedos_obj, float)
-            R_corr = _base(e_obj, ORIENTACION_MANO["palma"]) @ _base(e_t, palma).T   # giro en el mundo
+            palma_obj = ORIENTACION_MANO["palma"]
+            if isinstance(palma_obj, dict):
+                palma_obj = palma_obj[lado]
+            R_corr = _base(e_obj, palma_obj) @ _base(e_t, palma).T   # giro en el mundo
             R_q = np.zeros(9)
             mujoco.mju_quat2Mat(R_q, np.asarray(montaje[lado]["quat"], float))
             R_local = R_w.T @ R_corr @ R_w @ R_q.reshape(3, 3)                      # visto desde la muneca
@@ -485,7 +498,7 @@ def _normalizar(mundo, espejar):
 
 # ============================== MANO =========================================
 class ManoOrca:
-    def __init__(self, m, d, lado):
+    def __init__(self, m, d, lado, reloj=time.monotonic):
         self.m, self.d, self.lado = m, d, lado
         pref = PREFIJO[lado]
         nombre = lambda tipo, i: mujoco.mj_id2name(m, tipo, i) or ""
@@ -516,12 +529,15 @@ class ManoOrca:
                            muneca_bloqueada=False, pinza_previa=False, ultima_pos_palma=0.0,
                            vec_neutro=None, eje_lateral=None, calc_muneca=0.0,
                            dedo_activo="indice", modo_pinza=False, dedo_bloqueado=None,
-                           pinza_tocando=False, pinza_habilitada=True)
-        self.suav = SuavizadorND(n_dim=N_ACT - 1, ventana=4)
+                           pinza_tocando=False, pinza_habilitada=not IMITACION_PURA)
+        # One Euro en lugar de la media movil de 4 fotogramas (que retrasaba ~0.3 s)
+        self.suav = FiltroDedos(n_dim=N_ACT - 1, min_cutoff=DEDOS_FILTRO_MIN_CUTOFF, beta=DEDOS_FILTRO_BETA,
+                                reloj=reloj)
 
         # Palma = cuerpo que mueve la junta 0 (muneca de la Orca). Yemas = cuerpos finales
         # que cuelgan de la palma (asi no cuentan la torre ni el antebrazo de la Orca).
         self.palma = int(m.jnt_bodyid[self.juntas[0]])
+        self.marco_sem_local = self._marco_semantico_palma()
 
         def cuelga_de_palma(b):
             while b > 0:
@@ -536,6 +552,31 @@ class ManoOrca:
                             for g in range(m.body_geomadr[b], m.body_geomadr[b] + m.body_geomnum[b])]
         self.acoples = self._buscar_acoples(pref)
         self._escribir()
+
+    # ---------------------------------------------------------------- orientacion
+    def _marco_semantico_palma(self):
+        """Marco semantico de la palma (en coordenadas del cuerpo de la palma), con la mano
+        en su postura actual (reposo): dedos = de la muneca de la Orca al nudillo MCP del
+        corazon; ancho = del nudillo MCP del indice al del menique; normal = su producto
+        vectorial. Son los anclajes de las juntas 0 (muneca), 8 (corazon mcp), 11 (indice
+        mcp) y 2 (menique mcp): el mismo marco que SeguidorManos.marco() saca de los
+        landmarks 0, 9, 5 y 17 de MediaPipe."""
+        m, d = self.m, self.d
+        mujoco.mj_kinematics(m, d)
+        anc = lambda i: d.xanchor[self.juntas[i]].copy()
+        f = anc(8) - anc(0)
+        a = anc(2) - anc(11)
+        R_mundo = marco_semantico(f, a)
+        R_local = d.xmat[self.palma].reshape(3, 3).T @ R_mundo
+        print(f"   palma {self.lado}: muneca->MCP corazon {np.linalg.norm(f) * 100:.1f} cm, "
+              f"ancho indice->menique {np.linalg.norm(a) * 100:.1f} cm")
+        return R_local
+
+    def modo_pinza(self, activar):
+        """Activa/desactiva las posturas de pinza predefinidas (False = imitacion pura)."""
+        self.estado["pinza_habilitada"] = bool(activar)
+        if not activar:
+            self.estado["modo_pinza"], self.estado["dedo_bloqueado"] = False, None
 
     # ---------------------------------------------------------------- juntas acopladas
     def _buscar_acoples(self, pref):
@@ -611,7 +652,8 @@ class ManoOrca:
         return 0.5 * (yemas + self.d.xpos[self.palma])
 
     def orientacion(self):
-        return self.d.xmat[self.palma].reshape(3, 3)
+        """Marco semantico de la palma en el mundo (columnas: dedos, ancho, normal)."""
+        return self.d.xmat[self.palma].reshape(3, 3) @ self.marco_sem_local
 
 
 # ============================== PRUEBA RAPIDA =================================

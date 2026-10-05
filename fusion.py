@@ -50,14 +50,25 @@ CALIBRACION
     principal, otra sostiene el marco y el robot no se entera. Sin IMU se detecta
     porque sus medidas dejan de cuadrar (suponiendo que se ha movido la secundaria).
 
-MANOS: no se promedian; se usa la camara que ve la mano mas grande (con
-  histeresis) y su orientacion y sus puntos se rotan al marco de salida.
+MANOS (oct-2026): si dos camaras SITUADAS ven la misma mano casi a la vez, se TRIANGULAN
+  sus 21 landmarks (manos3d.py): orientacion y puntos 3D metricos reales, sin la
+  profundidad aplastada del modelo. Si no, la camara que mejor la ve (tamano x calidad,
+  con histeresis): "2.5D" (pixeles + profundidad OAK-D de la palma) o el modelo. La
+  apertura siempre sale de la mejor camara. Todo en el marco de salida (R_F).
+  El codo que nadie ve se RECONSTRUYE (brazo_geometria.py) en vez de dar el brazo por recto.
+  Cada punto 3D entra en el Kalman con su 'calidad' (seguimiento_brazos): un codo con una
+  longitud de hueso imposible pesa poco.
 """
+import json
+import os
 import time
 from collections import deque
 from types import SimpleNamespace
 
 import numpy as np
+
+import brazo_geometria
+import manos3d
 
 # Ejes del operador en el marco de la camara, con la camara horizontal y el
 # operador de frente a ella (la tecla 'c' los recalcula).
@@ -87,6 +98,8 @@ T_AVISO_IMU = 3.0             # s excluida por su IMU antes de avisar en pantall
 EDAD_PREVIO = 0.5             # s: la fusion anterior sirve de referencia durante este tiempo
 MARGEN_CRUCE_DEG = 20.0       # cruzados tienen que encajar esto mejor (media por hueso)
 HISTERESIS_MANO = 1.25        # la mano solo cambia de camara si la otra la ve 25 % mas grande
+DT_MANOS = 0.06               # s: diferencia maxima de captura entre camaras para triangular una mano
+                              # (los pixeles se adelantan con su velocidad hasta el instante comun)
 MARGEN_INVARIANTE = 25.0      # grados: para decidir un cruce sin calibracion (flexion + elevacion)
 # Cruces izquierda/derecha: filtro de Markov sobre "esta camara tiene izq/der cambiados".
 P_CAMBIO_CRUCE = 0.02         # por foto: MediaPipe cambia sus etiquetas (en un sentido u otro)
@@ -938,9 +951,53 @@ class SolucionadorTraslacion:
         return float(np.median(np.linalg.norm(X - t, axis=1))), len(W)
 
 
+# ================================================================== extrinsecas (ChArUco)
+EXTRINSECAS_ARCHIVO = "camaras_extrinsecas.json"
+
+
+def ruta_extrinsecas(ruta=None):
+    """Por defecto, junto a este archivo (donde lo guarda calibrar_extrinseca.py)."""
+    ruta = ruta or EXTRINSECAS_ARCHIVO
+    return ruta if os.path.isabs(ruta) else os.path.join(os.path.dirname(os.path.abspath(__file__)), ruta)
+
+
+def cargar_extrinsecas(mxid_a=None, mxid_b=None, ruta=None):
+    """Lee camaras_extrinsecas.json (lo genera calibrar_extrinseca.py) y devuelve
+    (R_ab, t_ab, info) con  p_A = R_ab @ p_B + t_ab,  o None si no hay archivo o no
+    corresponde a estas camaras. Si se abren en orden contrario al de la calibracion
+    (A<->B) se invierte la transformacion."""
+    ruta = ruta_extrinsecas(ruta)
+    if not os.path.exists(ruta):
+        print(f"[fusion] No existe {os.path.basename(ruta)}: la camara B solo entrara en la fusion "
+              f"cuando se autocalibre sola (lento y poco preciso). Ejecuta  python calibrar_extrinseca.py")
+        return None
+    with open(ruta, encoding="utf-8") as f:
+        d = json.load(f)
+    R = np.array(d["R_ab"], dtype=float).reshape(3, 3)
+    t = np.array(d["t_ab"], dtype=float).reshape(3)
+    fa, fb = d.get("mxid_a"), d.get("mxid_b")
+    if mxid_a and mxid_b and fa and fb:
+        if (str(mxid_a), str(mxid_b)) == (str(fa), str(fb)):
+            pass
+        elif (str(mxid_a), str(mxid_b)) == (str(fb), str(fa)):
+            print("[fusion] Camaras abiertas en orden inverso al de la calibracion: se invierte la transformacion")
+            R, t = R.T, -R.T @ t
+        else:
+            print(f"[fusion] Las camaras abiertas ({mxid_a} / {mxid_b}) NO coinciden con las de "
+                  f"{os.path.basename(ruta)} ({fa} / {fb}): se ignora. Recalibra con calibrar_extrinseca.py")
+            return None
+    if abs(np.linalg.det(R) - 1.0) > 1e-3 or np.linalg.norm(R @ R.T - np.eye(3)) > 1e-3:
+        print(f"[fusion] {os.path.basename(ruta)}: R_ab no es una rotacion valida, se ignora")
+        return None
+    return R, t, d
+
+
 # ================================================================== fusion
 class FusionCamaras:
-    def __init__(self, hilos, reloj=time.monotonic):
+    def __init__(self, hilos, reloj=time.monotonic, extrinsecas=None):
+        """extrinsecas: (R_ab, t_ab) de la camara B (hilos[1]) respecto a la A (hilos[0]),
+        con  p_A = R_ab @ p_B + t_ab  (calibrar_extrinseca.py). Con ellas B entra en la
+        fusion desde el primer fotograma, ya situada en 3D, sin esperar a autocalibrarse."""
         self.hilos = list(hilos)                 # hilos[0] = camara principal
         self.reloj = reloj
         N = len(self.hilos)
@@ -959,6 +1016,9 @@ class FusionCamaras:
         self._actualizar_R()
         self.calibrada_c = False
         self._inclinacion_hecha = False
+        self._fija = [False] * N                     # calibracion entre camaras de archivo (ChArUco) vigente
+        if extrinsecas is not None and N >= 2:
+            self._cargar_extrinsecas(*extrinsecas[:2])
         # calibracion automatica
         self.solvers = [SolucionadorRotacion() for _ in range(N)]
         self.solvers_t = [SolucionadorTraslacion() for _ in range(N)]
@@ -980,13 +1040,14 @@ class FusionCamaras:
         self._n_cruces = [-1] * len(self.hilos)
         self._kalman_n = {}                         # (lado, indice, camara) -> ultimo frame usado
         self._kalman_cams = {}                      # (lado, indice) -> {camara: t de su ultima medida}
-        self._filtros = {}                          # (lado, hueso) -> FiltroOneEuro (modo puntos)
         self._alfa_puntos = {}                      # lado -> 0 (direcciones) .. 1 (puntos)
         self._ult_pts = {}                          # lado -> (ultimas direcciones por puntos, instante)
         self._t_ultimo = None
         self.n = 0
         self._n_vistos = [-1] * N
         self._mano_cam = {}
+        self._hist_mano = {}                      # (camara, lado) -> (px, t, n) para adelantar pixeles
+        self._codo_previo = {}                    # lado -> ultimo codo fusionado en W (para reconstruirlo si se tapa)
         self._previo, self._t_previo = {}, -1e9
         self._avisos = {}
         self._t_excluida = [None] * N             # desde cuando la excluye su IMU
@@ -1124,7 +1185,7 @@ class FusionCamaras:
                 if not varias:
                     e = "ok"
                 elif self.t_valida[i]:
-                    e = "ok 3D"
+                    e = "ok 3D (ChArUco)" if self._fija[i] else "ok 3D"
                 else:
                     e = f"ok, situando ({len(self.solvers_t[i])})"
             elif self._ancla() is None:
@@ -1170,7 +1231,12 @@ class FusionCamaras:
                 discrepancia = max(angulo_rotacion_deg(Gs[a] @ Gs[b].T)
                                    for a in range(len(Gs)) for b in range(a + 1, len(Gs)))
                 if discrepancia > DISCREPANCIA_C_MAX:
-                    G = None        # la relacion entre ellas estaba mal: nada de promediar
+                    if any(self._fija[i] for i in con_relacion):
+                        # la relacion viene de ChArUco (mucho mas precisa que una postura): se conserva
+                        self._aviso(f"Al calibrar con c, las posturas de las camaras discrepan {discrepancia:.0f} deg; "
+                                    "se conserva la calibracion ChArUco entre ellas", 8.0)
+                    else:
+                        G = None    # la relacion entre ellas estaba mal: nada de promediar
         if G is not None:
             conservada = True
             for i in vigentes:
@@ -1210,7 +1276,23 @@ class FusionCamaras:
         self._previo = {}
         return dict(ok=True, conservada=conservada, discrepancia=discrepancia, directas=directas)
 
+    def _cargar_extrinsecas(self, R_ab, t_ab):
+        """Situa la camara B respecto a la A con la calibracion ChArUco."""
+        R_ab = np.asarray(R_ab, dtype=float).reshape(3, 3)
+        t_ab = np.asarray(t_ab, dtype=float).reshape(3)
+        self.R_op[1] = self.R_op[0] @ R_ab
+        self.t[1] = self.R_op[0] @ t_ab
+        self.valida[1] = self.t_valida[1] = True
+        self.desalineada[1] = False
+        self.R_ref[1] = self.R_op[1].copy()
+        self._fija[1] = True
+        self._actualizar_R()
+        giro = angulo_rotacion_deg(R_ab)
+        print(f"[fusion] Extrinsecas ChArUco cargadas: B a {np.linalg.norm(t_ab):.2f} m de A, "
+              f"girada {giro:.0f} grados. Las dos camaras entran en la fusion desde el primer fotograma.")
+
     def _fijar_directa(self, i, R):
+        self._fija = [False] * len(self.hilos)
         self.R_op[i] = np.array(R, dtype=float)
         self.R_ref[i] = self.R_op[i].copy()
         self.desalineada[i] = False
@@ -1231,7 +1313,14 @@ class FusionCamaras:
         arriba = self._arriba(0)
         if arriba is None:
             return
+        R0_ant = self.R_op[0].copy()
         self.R_op[0] = marco_por_defecto(arriba)
+        G = self.R_op[0] @ R0_ant.T          # giro del marco W: se aplica a las camaras ya situadas respecto a A
+        for i in range(1, len(self.hilos)):
+            if self._fija[i]:
+                self.R_op[i] = G @ self.R_op[i]
+                self.t[i] = G @ self.t[i]
+                self.R_ref[i] = self.R_op[i].copy()
         self.R_F = self.R_op[0].copy()
         self._arriba_ref[0] = arriba
         self._actualizar_R()
@@ -1251,6 +1340,10 @@ class FusionCamaras:
         sigue valiendo y solo hay que volver a situarla."""
         letra = ETIQUETAS[i]
         N = len(self.hilos)
+        if any(self._fija):
+            self._aviso("Se ha movido una camara: la calibracion ChArUco ya no vale (vuelvo a la automatica). "
+                        "Cuando puedas: python calibrar_extrinseca.py", 10.0)
+        self._fija = [False] * N
         self.solvers_t[i].vaciar()
         self.info_t[i] = None
         self._hist_p[i] = {}
@@ -1455,15 +1548,23 @@ class FusionCamaras:
                 if self.desalineada[k]:
                     continue
             elif cnt >= MIN_PARES_MOVIDA and med > RES_MOVIDA:
+                if self._fija[k]:
+                    # calibrada con ChArUco: unas medidas que no cuadran (oclusiones, izq/der) no
+                    # bastan para tirar una calibracion de 1 grado; si la camara se mueve lo dice la IMU
+                    self._aviso(f"Camara {letra}: sus medidas no cuadran con {ETIQUETAS[ancla]} ({med:.0f} deg) "
+                                "pero se conserva la calibracion ChArUco (si la has movido, recalibra)", 10.0)
+                    s.vaciar(antes_de=ahora - VENTANA_RECIENTE)
+                    continue
                 s.vaciar(antes_de=ahora - VENTANA_RECIENTE)
                 self.valida[k] = self.t_valida[k] = False
+                self._fija = [False] * len(self.hilos)
                 self.solvers_t[k].vaciar()
                 self._visto[k] = {}
                 self._aviso(f"Camara {letra}: ya no cuadra con {ETIQUETAS[ancla]} ({med:.0f} deg). "
                             f"Se recalibra sola suponiendo que la movida es la {letra}; "
                             f"si has movido la {ETIQUETAS[ancla]}, pulsa c", 10.0)
                 continue
-            if r["ok"] and angulo_rotacion_deg(r["R"] @ self.R_op[k].T) > REFINO_MIN_DEG:
+            if r["ok"] and not self._fija[k] and angulo_rotacion_deg(r["R"] @ self.R_op[k].T) > REFINO_MIN_DEG:
                 ref = self.R_ref[k] if self.R_ref[k] is not None else self.R_op[k]
                 if angulo_rotacion_deg(r["R"] @ ref.T) <= MAX_DERIVA:     # afinado acotado
                     self.R_op[k] = interpolar_rot(self.R_op[k], r["R"], REFINO)
@@ -1501,69 +1602,15 @@ class FusionCamaras:
             med, cnt = s.residuos_recientes(self.R_op[k], self.t[k], ahora - VENTANA_RECIENTE)
             if cnt >= MIN_PARES_MOVIDA and med > max(RES_T_MOVIDA, 2.5 * r["mediana"]):
                 s.vaciar(antes_de=ahora - VENTANA_RECIENTE)
+                if self._fija[k]:      # ChArUco: se conserva (ver _resolver)
+                    continue
                 self.t_valida[k] = False
+                self._fija = [False] * N
                 self._aviso(f"Camara {letra}: su posicion ya no cuadra ({med * 100:.0f} cm): "
                             "se vuelve a situar sola")
                 continue
-            if r["ok"]:
+            if r["ok"] and not self._fija[k]:
                 self.t[k] = self.t[k] + REFINO_T * (r["t"] - self.t[k])
-
-    # ------------------------------------------------------------ cruce izq/der
-    def _cruce_dirigido(self, i, brazos_i, referencia):
-        """True si los brazos de la camara i encajan claramente mejor con la referencia
-        (direcciones en el marco de salida) intercambiando izq/der, False si claramente
-        no, None si no se sabe."""
-        directo, cruzado = [], []
-        for lado, b in brazos_i.items():
-            vs = [self.R[i] @ b[h] for h in HUESOS]
-            for otro, lista in ((lado, directo), (OTRO[lado], cruzado)):
-                if otro in referencia:
-                    lista += [angulo_deg(v, referencia[otro][h]) for v, h in zip(vs, HUESOS)]
-        if not directo or not cruzado:
-            return None
-        d, c = float(np.mean(directo)), float(np.mean(cruzado))
-        if c + MARGEN_CRUCE_DEG < d:
-            return True
-        if d + MARGEN_CRUCE_DEG < c:
-            return False
-        return None
-
-    def _esta_cruzada(self, i, brazos_i, referencia):
-        return bool(self._cruce_dirigido(i, brazos_i, referencia))
-
-    def _resolver_cruces(self, snaps, usar, ancla, previo):
-        """MediaPipe a veces cambia izquierda y derecha (sobre todo si no ve la cara).
-        Se compara cada camara con la de referencia; si no coinciden, se corrige la que
-        menos cara ve (o, si eso no decide, la que no continua el movimiento anterior).
-        Una camara sola se compara con la fusion anterior."""
-        cruzadas = []
-        if not usar:
-            return cruzadas
-        ref = ancla if ancla in usar else usar[0]
-        otras = [i for i in usar if i != ref and snaps[i]["brazos"]]
-        if not otras or not snaps[ref]["brazos"]:
-            for i in usar:
-                if snaps[i]["brazos"] and previo and self._cruce_dirigido(i, snaps[i]["brazos"], previo):
-                    snaps[i] = _cruzar(snaps[i])
-                    cruzadas.append(ETIQUETAS[i])
-            return cruzadas
-        for i in otras:
-            ref_dirs = {l: {h: self.R[ref] @ b[h] for h in HUESOS} for l, b in snaps[ref]["brazos"].items()}
-            rel = self._cruce_dirigido(i, snaps[i]["brazos"], ref_dirs)
-            if rel is None:
-                rel = cruce_invariante(snaps[ref], snaps[i])
-            if not rel:
-                continue
-            f_ref, f_i = _frontalidad(snaps[ref]), _frontalidad(snaps[i])
-            if f_ref is not None and f_i is not None and abs(f_ref - f_i) > DIF_FRONTALIDAD:
-                girar = ref if f_ref < f_i else i
-            elif previo and self._cruce_dirigido(ref, snaps[ref]["brazos"], previo):
-                girar = ref
-            else:
-                girar = i
-            snaps[girar] = _cruzar(snaps[girar])
-            cruzadas.append(ETIQUETAS[girar])
-        return cruzadas
 
     # ------------------------------------------------------------ fusion
     def ultimo(self):
@@ -1689,7 +1736,7 @@ class FusionCamaras:
         for lado in ("L", "R"):
             cand = [(i, snaps[i]["aperturas"][lado]) for i in usar if lado in snaps[i]["aperturas"]]
             if cand:
-                aperturas[lado] = self._elegir_mano(lado, cand, snaps)
+                aperturas[lado] = self._fundir_mano(lado, cand, snaps, ahora)
 
         res = dict(snaps[base])
         res["n"] = self.n
@@ -1806,6 +1853,9 @@ class FusionCamaras:
                 continue
             self._kalman_n[(lado, j, i)] = snaps[i]["n"]
             peso = max(1e-3, _suave((pt["vis"] - VIS_PUNTO) / (VIS_PLENA - VIS_PUNTO))) * self._rampa_cam(i, ahora)
+            # calidad del punto segun su camara (codo con longitud imposible = inventado): la
+            # informacion que aporta se reduce con el CUADRADO (equivale a multiplicar su sigma)
+            peso *= max(0.05, float(pt.get("calidad", 1.0))) ** 2
             m, L, L0, con_z = self._gaussiana(i, j, np.array(pt["uv"], float), pt["z"], pt["fuente"],
                                              snaps[i]["K"], peso)
             medidas.append((snaps[i]["t"], i, m, L, con_z))
@@ -1845,29 +1895,55 @@ class FusionCamaras:
             return None
         codo_visto = codo is not None and any(snaps[i]["puntos"].get(PUNTOS_BRAZO[lado][1], {}).get("vis", 0) >= VIS_PUNTO
                                               for i in cams)
+        tapado = False
         if codo_visto:
             lb, la = np.linalg.norm(codo - hombro), np.linalg.norm(muneca - codo)
             if not (RANGO_BRAZO[0] < lb < RANGO_BRAZO[1] and RANGO_ANTEBRAZO[0] < la < RANGO_ANTEBRAZO[1]):
-                return None
-            d_b, d_a, tapado = _unitario(codo - hombro), _unitario(muneca - codo), False
-        else:   # nadie ve el codo: brazo recto de hombro a muneca (como en seguimiento_brazos)
+                codo_visto = False      # codo imposible (inventado): se reconstruye como si no se viera
+        if not codo_visto:
+            # nadie ve el codo: en vez de dar el brazo por recto (saltos de 20-30 cm en la muneca
+            # del robot), se reconstruye con las longitudes del operador y el ultimo codo conocido
             if not RANGO_HOMBRO_MUNECA[0] < np.linalg.norm(muneca - hombro) < RANGO_HOMBRO_MUNECA[1]:
                 return None
-            d_b = d_a = _unitario(muneca - hombro)
-            tapado = True
+            from seguimiento_brazos import LONGITUDES
+            fuera = np.array([0.0, 1.0 if lado == "L" else -1.0, 0.0])    # W: y hacia la izquierda del operador
+            codo, tapado = brazo_geometria.codo_en_circulo(hombro, muneca, LONGITUDES.brazo, LONGITUDES.antebrazo,
+                                                           self._codo_previo.get(lado), abajo=[0.0, 0.0, 1.0], fuera=fuera)
+        self._codo_previo[lado] = codo
+        d_b, d_a = _unitario(codo - hombro), _unitario(muneca - codo)
+        if d_b is None or d_a is None:
+            return None
         salida = {"dir_brazo": _unitario(self.R_F.T @ d_b), "dir_antebrazo": _unitario(self.R_F.T @ d_a)}
-        salida["fuente"] = "3D " + "+".join(ETIQUETAS[i] for i in sorted(usadas)) + (" codo tapado" if tapado else "")
+        salida["fuente"] = "3D " + "+".join(ETIQUETAS[i] for i in sorted(usadas)) + (" codo reconstruido" if tapado else "")
         salida["vis"] = vis
         return salida
 
     # ------------------------------------------------------------ manos
-    def _elegir_mano(self, lado, cand, snaps):
-        """Apertura y orientacion de UNA camara (no se promedian: la apertura depende de
-        la vista). Gana la que ve la mano mas grande, con histeresis para que no parpadee.
-        datos["cam"] dice cual es: el teleop lo usa para que el giro no salte al cambiar.
-        La orientacion (marco) y los puntos 3D de la mano (mundo, para la OrcaHand) se
-        rotan al marco de salida, asi no depende de que camara de la mano."""
-        puntuacion = {i: tamano_mano(snaps[i].get("manos"), lado) for i, _ in cand}
+    def _actualizar_hist_mano(self, i, lado, datos, snap):
+        """Guarda los pixeles de la mano de la camara i para poder adelantarlos (velocidad)."""
+        px = datos.get("px")
+        if px is None:
+            return None, None
+        clave = (i, lado)
+        prev = self._hist_mano.get(clave)
+        if prev is None or prev[2] != snap["n"]:
+            self._hist_mano[clave] = (np.asarray(px, float), snap["t"], snap["n"],
+                                      None if prev is None else prev[0], None if prev is None else prev[1])
+        h = self._hist_mano[clave]
+        return h[3], h[4]      # px y t del fotograma ANTERIOR
+
+    def _fundir_mano(self, lado, cand, snaps, ahora):
+        """Una mano a partir de lo que ven las camaras que la detectan.
+          1) Si dos (o mas) camaras SITUADAS la ven casi a la vez: TRIANGULACION de los 21
+             landmarks -> orientacion y puntos 3D metricos reales ("3D A+B").
+          2) Si no, la camara que mejor la ve (tamano x calidad, con histeresis): puntos
+             "2.5D" (pixeles + profundidad OAK-D de la palma + profundidad relativa del
+             modelo) o, sin profundidad, el marco y los world landmarks del modelo.
+        La apertura (0..1) viene siempre de la mejor camara: depende de la vista.
+        El marco y los puntos se dan en el marco de SALIDA (R_F), como las direcciones."""
+        puntuacion = {}
+        for i, m in cand:
+            puntuacion[i] = tamano_mano(snaps[i].get("manos"), lado) * (0.3 + 0.7 * float(m.get("calidad", 1.0)))
         mejor = max(puntuacion, key=puntuacion.get)
         actual = self._mano_cam.get(lado)
         if actual in puntuacion and puntuacion[actual] * HISTERESIS_MANO >= puntuacion[mejor]:
@@ -1875,13 +1951,58 @@ class FusionCamaras:
         self._mano_cam[lado] = mejor
         datos = dict(next(m for i, m in cand if i == mejor))
         datos["cam"] = ETIQUETAS[mejor]
-        datos["tam_px"] = puntuacion[mejor]
+        datos["tam_px"] = tamano_mano(snaps[mejor].get("manos"), lado)
         datos["bruto"] = next((m["bruto"] for m in snaps[mejor].get("manos") or []
                                if m["lado"] == lado), None)
+        datos.pop("px", None)
+
+        # --- 1) triangulacion entre camaras situadas ---
+        vistas, usadas = [], []
+        con_px = [(i, m) for i, m in cand if m.get("px") is not None and snaps[i].get("K") is not None
+                  and self.t_valida[i] and self.valida[i]]
+        if len(con_px) >= 2:
+            t_ref = max(snaps[i]["t"] for i, _ in con_px)
+            for i, m in con_px:
+                if t_ref - snaps[i]["t"] > DT_MANOS:
+                    continue
+                px_prev, t_prev = self._actualizar_hist_mano(i, lado, m, snaps[i])
+                px = manos3d.extrapolar_px(m["px"], px_prev, snaps[i]["t"], t_prev, t_ref)
+                vistas.append((px, snaps[i]["K"], self.R_op[i], self.t[i]))
+                usadas.append(i)
+        else:
+            for i, m in con_px:
+                self._actualizar_hist_mano(i, lado, m, snaps[i])
+        if len(vistas) >= 2:
+            tri = manos3d.triangular(vistas)
+            if tri is not None and manos3d.triangulacion_valida(*tri):
+                P_w = tri[0]
+                R_w = manos3d.marco_de_puntos(P_w)
+                if R_w is not None:
+                    P_out = manos3d.centrar(P_w) @ self.R_F            # W -> marco de salida (R_F^T p)
+                    datos["marco"] = self.R_F.T @ R_w
+                    datos["mundo"] = manos3d.a_puntos(P_out)
+                    datos["puntos3d"] = P_w
+                    datos["fuente_mano"] = "3D " + "+".join(ETIQUETAS[i] for i in sorted(usadas))
+                    datos["reproy_px"] = float(max(tri[1]))
+                    return datos
+
+        # --- 2) una camara: 2.5D si hay profundidad de la palma; si no, el modelo ---
+        m = next(m for i, m in cand if i == mejor)
         R = self.R[mejor]
+        K = snaps[mejor].get("K")
+        if m.get("px") is not None and m.get("z_palma") is not None and K is not None and m.get("mundo") is not None:
+            P_cam = manos3d.levantar_25d(m["px"], K, m["z_palma"], m["mundo"])
+            R_m = manos3d.marco_de_puntos(P_cam)
+            if R_m is not None:
+                P_out = manos3d.centrar(P_cam) @ R.T
+                datos["marco"] = R @ R_m
+                datos["mundo"] = manos3d.a_puntos(P_out)
+                datos["fuente_mano"] = f"2.5D {ETIQUETAS[mejor]}"
+                return datos
         if not np.allclose(R, np.eye(3), atol=1e-9):
             if datos.get("marco") is not None:
                 datos["marco"] = R @ datos["marco"]
             if datos.get("mundo") is not None:
                 datos["mundo"] = _rotar_landmarks(datos["mundo"], R)
+        datos["fuente_mano"] = f"modelo {ETIQUETAS[mejor]}"
         return datos

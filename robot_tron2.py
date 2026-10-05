@@ -3,17 +3,30 @@ TRON 2 (DACH_TRON2A) en MuJoCo: carga con la base fija + IK de los dos brazos.
 
 La IK no depende del orden ni de los nombres exactos de las articulaciones:
 recorre la cadena desde el cuerpo final de cada brazo (grasper_L_Link /
-grasper_R_Link), se queda con las bisagras de ese lado y separa
+wrist_roll_L_Link), se queda con las bisagras de ese lado y separa
 hombro / codo / muneca buscando "elbow" en el nombre. Al arrancar imprime
 lo que ha detectado para poder revisarlo.
 
 Tareas de la IK (minimos cuadrados amortiguados, en modo cinematico):
   - llevar el CODO del robot a su objetivo
   - llevar el CENTRO DE LA MUNECA del robot a su objetivo
+  - orientar la PALMA como la del operador (solo con las 3 juntas de la muneca,
+    que es esferica: no mueve la posicion). La orientacion se compara entre
+    marcos SEMANTICOS iguales en el humano y en el robot: eje 0 hacia los dedos,
+    eje 1 del nudillo del indice al del menique, eje 2 = normal de la palma.
   - en el espacio nulo: volver a reposo y alejarse de los limites articulares
 Ademas: respeta los limites (bloquea la articulacion y compensan las demas),
 solo acepta pasos que reducen el error, limita la velocidad articular y,
 si el brazo se atasca en un minimo local, busca otra solucion.
+
+CAMBIOS (oct-2026, imitacion):
+  - Antes la IK recibia una orientacion CONSTANTE (marco_mano con la identidad) y
+    mover_muneca() devolvia las juntas "rigidas" de la muneca al reposo en cada ciclo:
+    las dos tareas se peleaban, la busqueda lineal rechazaba pasos buenos y la muneca
+    no copiaba al operador. Ahora hay una sola tarea de orientacion, con el marco real
+    de la mano, y mover_muneca() ha desaparecido.
+  - Sin mano a la vista se mantiene la ULTIMA orientacion objetivo (no se vuelve al reposo).
+  - El rescate de posturas incluye la muneca.
 """
 import os
 import time
@@ -22,68 +35,61 @@ import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 
+from suavizado import log_rot, ortonormalizar
+
 HINGE = int(mujoco.mjtJoint.mjJNT_HINGE)
 
 
-def log_rot(R):
-    """Vector rotacion (eje * angulo) de una matriz de rotacion."""
-    v = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
-    c = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
-    ang = float(np.arccos(c))
-    sen = np.sin(ang)
-    if sen < 1e-6:
-        return 0.5 * v if ang < 1e-3 else ang * v / max(np.linalg.norm(v), 1e-9)
-    return (ang / (2.0 * sen)) * v
+def unwrap_angular_delta(delta):
+    """Devuelve el delta angular sin saltos de 2π al cruzar ±π."""
+    delta = np.asarray(delta, dtype=float)
+    if not np.all(np.isfinite(delta)):
+        return np.zeros_like(delta, dtype=float)
+    return (delta + np.pi) % (2.0 * np.pi) - np.pi
 
 
 def angulo_giro(R, eje):
     """Parte de la rotacion R que es giro alrededor de 'eje' (unitario), en rad.
-    Descomposicion swing-twist: se queda solo con el 'retorcer' alrededor del eje y
-    descarta cualquier inclinacion, asi doblar la mano no cuenta como girarla."""
+    Descomposicion swing-twist (se conserva para diagnostico)."""
     w = np.sqrt(max(0.0, 1.0 + np.trace(R))) / 2.0
     if w > 1e-6:
         v = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]]) / (4.0 * w)
-    else:   # giro de ~180 grados: eje desde la diagonal
+    else:
         v = np.sqrt(np.clip((np.diag(R) + 1.0) / 2.0, 0.0, None))
     ang = 2.0 * np.arctan2(float(np.dot(v, eje)), w)
     return float((ang + np.pi) % (2 * np.pi) - np.pi)
 
 
-def ortonormalizar(R):
-    """Gram-Schmidt: devuelve la rotacion valida mas cercana a R."""
-    x = R[:, 0] / np.linalg.norm(R[:, 0])
-    y = R[:, 1] - x * np.dot(R[:, 1], x)
-    y /= np.linalg.norm(y)
-    return np.column_stack([x, y, np.cross(x, y)])
-
 # Cuerpo final de cada brazo, por orden de preferencia ({lado} = L o R)
-CANDIDATOS_EF = ["grasper_{lado}_Link", "wrist_roll_{lado}_Link"]
+CANDIDATOS_EF = ["grasper_{lado}_Link", "grasper_base_{lado}_Link", "wrist_roll_{lado}_Link"]
 
 # Distancia maxima (m) del centro estimado a cada eje para considerar
 # que el hombro / la muneca son esfericos (los tres ejes se cortan)
 TOL_ESFERICO = 0.03
 
-VEL_MAX = 3.0          # rad/s: velocidad maxima de cada articulacion al seguir al operador
-W_ORIENT = 0.08        # m/rad: peso de la orientacion de la pinza frente a la posicion
+VEL_MAX = 3.5          # rad/s: velocidad maxima de cada articulacion al seguir al operador
+W_ORIENT = 0.12        # m/rad: peso de la orientacion de la palma frente a la posicion
+                       # (1 rad = 57 grados de error "cuesta" lo mismo que 12 cm de posicion)
 VEL_PINZA = 2.5        # 1/s: velocidad de apertura y cierre de la pinza (0 a 1 en 0.4 s)
 PINZA_INVERTIDA = False  # True si toda la pinza abre cuando deberia cerrar
 # Juntas que llevan "grasp" en el nombre pero NO forman parte del mecanismo de la
 # pinza (p.ej. la que orienta la pinza entera). Se dejan quietas.
 PINZA_EXCLUIR = ("grasper_base", "orca")   # "orca": juntas de las OrcaHand (las mueve mano_orca.py)
-# Juntas sueltas del mecanismo cuyo sentido hay que invertir (por su nombre exacto)
 PINZA_JUNTAS_INVERTIDAS = ()
-# Recorrido a mano para juntas de la pinza SIN limites en el XML (no se puede
-# adivinar): {"grasper_L_jaw_left_Joint": (cerrado, abierto), ...}
 PINZA_RECORRIDO = {}
-VEL_TRANSICION = 1.0   # rad/s: al cambiar a otra solucion tras un rescate (antes 1.5: mas brusco)
+VEL_TRANSICION = 1.0   # rad/s: al cambiar a otra solucion tras un rescate
 MARGEN_LIMITE = 0.1    # rad: junto a un limite se empuja la articulacion hacia dentro
-ERROR_ATASCO = 0.10    # m: error a partir del cual se considera que el brazo esta atascado (antes 0.08)
-T_ATASCO = 1.0         # s: tiempo atascado antes de buscar otra solucion (antes 0.5: el rescate
-                       #    saltaba en cuanto el objetivo se movia deprisa y daba tirones)
+ERROR_ATASCO = 0.10    # m: error a partir del cual se considera que el brazo esta atascado
+T_ATASCO = 1.0         # s: tiempo atascado antes de buscar otra solucion
 MEJORA_MIN = 0.05      # m/s: si el error baja mas rapido que esto, el brazo NO esta atascado
-                       #      (solo va alcanzando un objetivo que ha saltado): no hay rescate
 T_TRANSICION_MAX = 2.0 # s: una transicion de rescate nunca dura mas que esto
 CANCELA_TRANSICION = 0.10  # m: si el objetivo se mueve esto durante la transicion, se cancela
+# Pinza original (simetrica): su "normal de la palma" es el eje de cierre de las mordazas, y
+# el signo se elige para que con los brazos colgando quede como la mano de una persona
+# relajada: palma hacia el muslo (hacia +y en la derecha). Para la izquierda el tercer eje
+# del marco semantico es el DORSO, que tambien apunta a +y. Asi el reposo de la pinza
+# coincide con el del operador y la muneca no arranca pegada a un limite.
+NORMAL_PINZA_REPOSO = np.array([0.0, 1.0, 0.0])
 
 
 def nombre(m, tipo, i):
@@ -109,7 +115,6 @@ def quitar_base_flotante(ruta_xml, extra=None):
                 key.set("qvel", " ".join(key.get("qvel").split()[6:]))
     if extra is not None:
         extra(root)
-    # Se guarda junto al original para que las rutas de mallas/includes sigan valiendo
     ruta_fija = os.path.join(os.path.dirname(os.path.abspath(ruta_xml)), "robot_fixed.xml")
     tree.write(ruta_fija)
     return ruta_fija
@@ -132,9 +137,23 @@ def centro_de_ejes(d, juntas):
     return p, residuo
 
 
+def marco_semantico(f, a):
+    """Marco de una mano a partir de la direccion de los dedos (f) y del vector del nudillo
+    del indice al del menique (a): columnas [dedos, ancho de la palma, normal]. Es la MISMA
+    construccion que SeguidorManos.marco() con los landmarks de MediaPipe, para que las
+    orientaciones del humano y del robot sean comparables. Para la mano izquierda el
+    tercer eje sale por el dorso (la construccion es la misma: se compara igual con igual)."""
+    f = np.asarray(f, float) / np.linalg.norm(f)
+    a = np.asarray(a, float)
+    a = a - f * np.dot(a, f)
+    a /= np.linalg.norm(a)
+    return np.column_stack([f, a, np.cross(f, a)])
+
+
 class Brazo:
-    def __init__(self, m, d, lado):
+    def __init__(self, m, d, lado, reloj=time.monotonic):
         self.m, self.d, self.lado = m, d, lado
+        self.reloj = reloj   # inyectable: la reproduccion de sesiones usa un reloj simulado
         self.mano = None   # OrcaHand montada en esta muneca (la asigna RobotTron2 con orca=True)
         self.ef = self._buscar_ef()
         cadena = self._cadena(self.ef)
@@ -189,17 +208,19 @@ class Brazo:
         self.L_antebrazo = float(np.linalg.norm(muneca - codo))
         self._jac = np.zeros((3, m.nv))
         self._jacr = np.zeros((3, m.nv))
-        # columnas de la muneca: las unicas que atienden a la orientacion de la pinza
+        # columnas de la muneca: las unicas que atienden a la orientacion de la palma
         self.mascara_muneca = np.array([j in self.j_muneca for j in self.juntas], dtype=float)
-        # junta de GIRO de la muneca: la de eje mas alineado con el antebrazo
-        # (en el TRON 2, wrist_yaw). Las demas de la muneca se mantienen rectas.
+        # junta de GIRO de la muneca: la de eje mas alineado con el antebrazo (diagnostico)
         antebrazo = (muneca - codo) / max(np.linalg.norm(muneca - codo), 1e-9)
         self.j_giro = max(self.j_muneca, key=lambda j: abs(np.dot(d.xaxis[j], antebrazo)))
         self.i_giro = self.juntas.index(self.j_giro)
-        self.i_rigidas = [self.juntas.index(j) for j in self.j_muneca if j != self.j_giro]
         self.i_muneca = [self.juntas.index(j) for j in self.j_muneca]
+        # orientacion: cuerpo que la lleva y marco semantico (en ese cuerpo). Con la pinza
+        # original se calcula aqui; con la OrcaHand lo fija RobotTron2 (preparar_orientacion)
+        self.b_orient = int(self.ef)
+        self.marco_sem_local = self._marco_pinza()
+        self.R_obj_ult = None
         self.err_ant, self.obj_rescate = 0.0, None
-        self.giro_obj = None
         self.q_transicion = None
         self.t_atascado, self.t_rescate = 0.0, -1e9
         self.rng = np.random.default_rng(0)
@@ -240,14 +261,7 @@ class Brazo:
         """Busca las articulaciones de la pinza: las que cuelgan del efector final,
         mas las que llevan 'grasp' en el nombre dentro de este brazo, quitando las
         de PINZA_EXCLUIR. Para cada una, el extremo del recorrido mas cercano a
-        cero se toma como pinza cerrada y el otro como abierta; asi vale igual
-        para las dos mordazas aunque sus rangos tengan signo opuesto.
-
-        En las pinzas de varillas (cadena cerrada con <equality>) se mueven todas
-        las juntas del mecanismo a la vez, en la misma fraccion de su recorrido.
-        Aqui no se simula fisica, asi que las restricciones de igualdad no se
-        resuelven solas; este reparto proporcional es exacto en los extremos
-        (abierta del todo y cerrada del todo) y muy aproximado por el camino."""
+        cero se toma como pinza cerrada y el otro como abierta."""
         m = self.m
         descendientes = set()
         for b in range(m.nbody):
@@ -272,7 +286,7 @@ class Brazo:
             if propia and (m.jnt_limited[j] or n in PINZA_RECORRIDO):
                 juntas.append(j)
             elif propia:
-                sin_limite.append(n)   # no se puede mapear: no sabemos su recorrido
+                sin_limite.append(n)
         self.j_pinza = juntas
         self.n_pinza = [nombre(m, mujoco.mjtObj.mjOBJ_JOINT, j) for j in juntas]
         self.qadr_pinza = np.array([m.jnt_qposadr[j] for j in juntas], dtype=int)
@@ -287,34 +301,6 @@ class Brazo:
         self.q_cerrado = np.array(cerrado, dtype=float)
         self.q_abierto = np.array(abierto, dtype=float)
         self.apertura = 1.0 if juntas else None
-        if not juntas:
-            self._diagnostico_pinza(sin_limite)
-
-    def _diagnostico_pinza(self, sin_limite):
-        """Si no se ha encontrado ninguna junta de pinza, explica por que: lista
-        todas las que llevan 'grasp' en el nombre con su tipo, limites y rango."""
-        m = self.m
-        tipos = {0: "free", 1: "ball", 2: "slide", 3: "hinge"}
-        print(f"\n[pinza {self.lado}] no he podido mapear ninguna articulacion. "
-              f"Juntas con 'grasp' en el nombre que hay en el modelo:")
-        hay = False
-        for j in range(m.njnt):
-            n = nombre(m, mujoco.mjtObj.mjOBJ_JOINT, j)
-            if "grasp" not in n.lower():
-                continue
-            hay = True
-            cuerpo = nombre(m, mujoco.mjtObj.mjOBJ_BODY, int(m.jnt_bodyid[j]))
-            motivo = ""
-            if any(x in n for x in PINZA_EXCLUIR):
-                motivo = "  <- excluida por PINZA_EXCLUIR"
-            elif n in sin_limite:
-                motivo = "  <- SIN limites en el XML: anade su recorrido a PINZA_RECORRIDO"
-            print(f"   {n:32s} cuerpo {cuerpo:28s} {tipos.get(int(m.jnt_type[j]), '?'):5s} "
-                  f"limited={bool(m.jnt_limited[j])} range=[{m.jnt_range[j][0]:+.5f}, "
-                  f"{m.jnt_range[j][1]:+.5f}]{motivo}")
-        if not hay:
-            print("   ninguna: este modelo no tiene pinza articulada")
-        print()
 
     def mover_pinza(self, apertura, dt):
         """Lleva la pinza hacia la apertura pedida (0 = cerrada, 1 = abierta)
@@ -342,8 +328,7 @@ class Brazo:
         self.d.qpos[self.qadr] = self.q_reposo
         if getattr(self, "mano", None) is not None:
             self.mano.reposo()
-        if hasattr(self, "giro_obj"):
-            self.giro_obj = None
+        self.R_obj_ult = None
         if self.j_pinza:
             self.apertura = 1.0
             self.d.qpos[self.qadr_pinza] = self.q_abierto
@@ -354,17 +339,15 @@ class Brazo:
 
     # ---------------- punto de agarre ----------------
     def _preparar_agarre(self):
-        """Geoms de las mordazas: el punto de agarre es el centro entre ellas.
-        (MuJoCo centra cada malla en su centro de masas, asi que la posicion de
-        cada geom de mordaza cae en mitad del dedo.) Si el modelo no tiene
-        mordazas articuladas se usan los geoms de la pinza entera."""
         m = self.m
+
         def geoms_de(cuerpos):
             return [g for b in cuerpos for g in range(m.body_geomadr[b], m.body_geomadr[b] + m.body_geomnum[b])
                     if m.body_geomnum[b] > 0]
         cuerpos = getattr(self, "cuerpos_pinza", set())
         mordazas = [b for b in cuerpos if "jaw" in nombre(m, mujoco.mjtObj.mjOBJ_BODY, b)]
         self.geoms_agarre = geoms_de(mordazas) or geoms_de(cuerpos)
+        self.cuerpos_mordaza = sorted(mordazas)
 
     def punto_agarre(self):
         """Punto (mundo) entre las mordazas de la pinza (o en la palma de la OrcaHand)."""
@@ -374,7 +357,45 @@ class Brazo:
             return self.d.geom_xpos[self.geoms_agarre].mean(axis=0)
         return self.d.xpos[self.ef].copy()
 
-    # ---------------- giro de la muneca ----------------
+    # ---------------- orientacion de la palma ----------------
+    def _marco_pinza(self):
+        """Marco semantico de la pinza original, en coordenadas del efector final:
+        dedos = del centro de la muneca hacia las mordazas; normal de la palma = eje de
+        cierre de las mordazas, con el signo que la deje mirando a PALMA_PINZA_REPOSO
+        (hacia atras) en el reposo, que es como cuelga la mano de una persona."""
+        d = self.d
+        _, muneca = self.puntos()
+        if self.geoms_agarre:
+            f = d.geom_xpos[self.geoms_agarre].mean(axis=0) - muneca
+        else:
+            f = d.xpos[self.ef] - muneca
+        if np.linalg.norm(f) < 1e-6:
+            f = -d.xmat[self.ef].reshape(3, 3)[:, 2]
+        f = f / np.linalg.norm(f)
+        if len(getattr(self, "cuerpos_mordaza", [])) >= 2:
+            n = d.xpos[self.cuerpos_mordaza[0]] - d.xpos[self.cuerpos_mordaza[1]]
+        else:   # sin mordazas: cualquier eje perpendicular a los dedos
+            n = np.cross(f, [0.0, 0.0, 1.0])
+            if np.linalg.norm(n) < 1e-3:
+                n = np.cross(f, [1.0, 0.0, 0.0])
+        n = n - f * np.dot(n, f)
+        n /= np.linalg.norm(n)
+        if np.dot(n, NORMAL_PINZA_REPOSO) < 0:
+            n = -n
+        a = np.cross(n, f)                      # ancho de la palma tal que f x a = n
+        R_mundo = marco_semantico(f, a)
+        return d.xmat[self.ef].reshape(3, 3).T @ R_mundo
+
+    def preparar_orientacion(self, b_orient, marco_local):
+        """Fija el cuerpo que lleva la orientacion y su marco semantico (lo llama
+        RobotTron2 cuando monta las OrcaHand)."""
+        self.b_orient = int(b_orient)
+        self.marco_sem_local = np.asarray(marco_local, dtype=float)
+
+    def orientacion(self):
+        """Marco semantico de la palma del robot en el mundo (columnas: dedos, ancho, normal)."""
+        return self.d.xmat[self.b_orient].reshape(3, 3) @ self.marco_sem_local
+
     def eje_giro(self):
         """Eje (mundo) de la junta de giro de la muneca, a lo largo del antebrazo."""
         a = self.d.xaxis[self.j_giro]
@@ -383,36 +404,14 @@ class Brazo:
     def giro(self):
         return float(self.d.qpos[self.qadr[self.i_giro]])
 
-    def mover_muneca(self, giro_obj, dt):
-        """Muneca solo con giro: la junta de giro va hacia 'giro_obj' (rad) y las
-        demas juntas de la muneca se quedan rectas, en reposo. Como la muneca es
-        esferica, esto no mueve la posicion del brazo. Con giro_obj=None mantiene
-        el ultimo objetivo recibido."""
-        if giro_obj is not None:
-            self.giro_obj = float(np.clip(giro_obj, self.lo[self.i_giro], self.hi[self.i_giro])
-                                  if self.limitado[self.i_giro] else giro_obj)
-        q = self.d.qpos[self.qadr].copy()
-        paso = VEL_MAX * dt
-        if self.giro_obj is not None:
-            q[self.i_giro] += np.clip(self.giro_obj - q[self.i_giro], -paso, paso)
-        for k in self.i_rigidas:
-            q[k] += np.clip(self.q_reposo[k] - q[k], -paso, paso)
-        self._fijar(self._limitar(q))
-
     # ---------------- IK ----------------
     def _fijar(self, q):
         self.d.qpos[self.qadr] = q
         mujoco.mj_kinematics(self.m, self.d)
         mujoco.mj_comPos(self.m, self.d)  # necesario para mj_jac
 
-    def orientacion(self):
-        """Orientacion actual de la pinza (marco del efector final) en el mundo."""
-        if self.mano is not None:
-            return self.mano.orientacion()
-        return self.d.xmat[self.ef].reshape(3, 3)
-
     def error(self, obj_c, obj_m, w_codo, R_obj=None):
-        """(error ponderado, error codo [m], error muneca [m], error giro [rad])."""
+        """(error ponderado, error codo [m], error muneca [m], error de orientacion [rad])."""
         p_c, p_m = self.puntos()
         ec, em = np.linalg.norm(obj_c - p_c), np.linalg.norm(obj_m - p_m)
         eo = 0.0 if R_obj is None else float(np.linalg.norm(log_rot(R_obj @ self.orientacion().T)))
@@ -425,13 +424,13 @@ class Brazo:
         m, d = self.m, self.d
         p_c, p_m = self.puntos()
         mujoco.mj_jac(m, d, self._jac, None, p_c, self.b_codo)
-        J_c = self._jac[:, self.dofs]
+        J_c = self._jac[:, self.dofs].copy()
         mujoco.mj_jac(m, d, self._jac, None, p_m, self.b_muneca)
-        J_m = self._jac[:, self.dofs]
+        J_m = self._jac[:, self.dofs].copy()
         filas_J = [w_codo * J_c, J_m]
         filas_e = [w_codo * (obj_c - p_c), obj_m - p_m]
-        if R_obj is not None:   # tarea de orientacion de la pinza
-            mujoco.mj_jac(m, d, None, self._jacr, p_m, self.ef)
+        if R_obj is not None:   # tarea de orientacion de la palma (solo las juntas de la muneca)
+            mujoco.mj_jac(m, d, None, self._jacr, p_m, self.b_orient)
             filas_J.append(W_ORIENT * self._jacr[:, self.dofs] * self.mascara_muneca)
             filas_e.append(W_ORIENT * log_rot(R_obj @ self.orientacion().T))
         J = np.vstack(filas_J)
@@ -462,7 +461,7 @@ class Brazo:
         """IK por minimos cuadrados amortiguados con busqueda lineal: solo se aceptan
         pasos que no empeoran el error, asi el brazo nunca 'da bandazos'.
         max_cambio: giro maximo de cada articulacion en esta llamada (rad).
-        Devuelve el error final (m) del codo y de la muneca."""
+        Devuelve (error codo [m], error muneca [m], error de orientacion [rad])."""
         q0 = self.d.qpos[self.qadr].copy()
         err = self.error(obj_c, obj_m, w_codo, R_obj)[0]
         for _ in range(iteraciones):
@@ -473,7 +472,8 @@ class Brazo:
             alfa, aceptado = 1.0, False
             for _ in range(4):
                 q_n = self._limitar(q + alfa * dq)
-                q_n = q0 + np.clip(q_n - q0, -max_cambio, max_cambio)
+                delta = unwrap_angular_delta(q_n - q0)
+                q_n = q0 + np.clip(delta, -max_cambio, max_cambio)
                 self._fijar(q_n)
                 err_n = self.error(obj_c, obj_m, w_codo, R_obj)[0]
                 if err_n <= err + 1e-4:
@@ -489,15 +489,16 @@ class Brazo:
     def seguir(self, obj_c, obj_m, dt, w_codo=0.6, R_obj=None):
         """Llamar en cada ciclo del bucle de control. IK con limite de velocidad y,
         si el brazo se queda atascado lejos del objetivo (minimo local, limites),
-        busca otra solucion y va hacia ella de forma suave."""
-        ahora = time.monotonic()
+        busca otra solucion y va hacia ella de forma suave.
+        R_obj: orientacion objetivo de la palma (marco semantico, mundo) o None. Sin ella
+        se mantiene la ultima recibida (la mano no se ve un momento -> no se mueve)."""
+        if R_obj is not None:
+            self.R_obj_ult = np.asarray(R_obj, dtype=float)
+        R_obj = self.R_obj_ult
+        ahora = self.reloj()
         if self.q_transicion is not None:
             q = self.d.qpos[self.qadr].copy()
-            falta = self.q_transicion - q
-            # La muneca NO entra en la transicion: la controla mover_muneca() en cada ciclo.
-            # (Antes si entraba: los dos tiraban de ella hacia valores distintos, 'falta'
-            # nunca bajaba de 0.02 y el brazo se quedaba congelado para siempre.)
-            falta[self.i_muneca] = 0.0
+            falta = unwrap_angular_delta(self.q_transicion - q)
             caducada = ahora - self.t_rescate > T_TRANSICION_MAX
             movido = (self.obj_rescate is not None
                       and np.linalg.norm(obj_m - self.obj_rescate) > CANCELA_TRANSICION)
@@ -510,50 +511,80 @@ class Brazo:
 
         ec, em, eo = self.resolver(obj_c, obj_m, R_obj, w_codo, max_cambio=VEL_MAX * dt)
         err = float(np.hypot(w_codo * ec, em))   # solo posicion
-        # Atascado = error grande Y que no baja. Si baja, el brazo solo va alcanzando un
-        # objetivo que ha saltado y lo mejor es dejarle seguir (antes se rescataba igual).
         mejora = self.err_ant - err
         self.err_ant = err
         atascado = err > ERROR_ATASCO and mejora < MEJORA_MIN * dt
         self.t_atascado = self.t_atascado + dt if atascado else 0.0
         if self.t_atascado > T_ATASCO and ahora - self.t_rescate > 1.0:
             self.t_rescate, self.t_atascado = ahora, 0.0
-            q_mejor, err_mejor = self._rescate(obj_c, obj_m, None, w_codo)
+            q_mejor, err_mejor = self._rescate(obj_c, obj_m, R_obj, w_codo)
             if err_mejor < 0.5 * err:
                 self.q_transicion = q_mejor
                 self.obj_rescate = np.array(obj_m, dtype=float)
+                print(f"[IK {self.lado}] RESCATE: el brazo cambia de postura "
+                      f"(error {err * 100:.0f} cm -> {err_mejor * 100:.0f} cm)")
         return ec, em, eo
+
+    def _semilla_rejilla(self, obj_c, obj_m, n_hombro=(12, 8), n_codo=(16, 12)):
+        """Postura de partida por busqueda en rejilla (no se queda en minimos locales):
+        1) las dos primeras juntas del hombro apuntan el brazo hacia el codo objetivo;
+        2) la ultima del hombro (giro humeral) y el codo colocan la muneca.
+        Son ~300 evaluaciones de la cinematica (unos ms); se usa en los rescates."""
+        q0 = self.d.qpos[self.qadr].copy()
+        n = len(q0)
+        i_c = self.juntas.index(self.j_codo)
+        rangos = [(self.lo[i], self.hi[i]) if self.limitado[i] else (-np.pi, np.pi) for i in range(n)]
+        q = self.q_reposo.copy()
+        q[self.i_muneca] = q0[self.i_muneca]
+        if len(self.j_hombro) >= 2:
+            mejor, mejor_e = q.copy(), np.inf
+            for a in np.linspace(*rangos[0], n_hombro[0]):
+                for b in np.linspace(*rangos[1], n_hombro[1]):
+                    q[0], q[1] = a, b
+                    self._fijar(q)
+                    e = np.linalg.norm(self.puntos()[0] - obj_c)
+                    if e < mejor_e:
+                        mejor, mejor_e = q.copy(), e
+            q = mejor
+        i_g = len(self.j_hombro) - 1          # ultima junta del hombro: giro humeral
+        mejor, mejor_e = q.copy(), np.inf
+        for g in np.linspace(*rangos[i_g], n_codo[0]) if i_g >= 2 else [q[i_g]]:
+            for c in np.linspace(*rangos[i_c], n_codo[1]):
+                q[i_g], q[i_c] = g, c
+                self._fijar(q)
+                p_c, p_m = self.puntos()
+                e = np.hypot(0.6 * np.linalg.norm(p_c - obj_c), np.linalg.norm(p_m - obj_m))
+                if e < mejor_e:
+                    mejor, mejor_e = q.copy(), e
+        self._fijar(q0)
+        return mejor
 
     def _rescate(self, obj_c, obj_m, R_obj, w_codo):
         """Prueba varias posturas de partida y devuelve la que mejor alcanza el objetivo."""
         q_act = self.d.qpos[self.qadr].copy()
-        semillas = [self.q_reposo.copy()]
+        semillas = [self.q_reposo.copy(), self._semilla_rejilla(obj_c, obj_m)]
         for i in range(len(self.j_hombro)):
             for delta in (-1.2, 1.2):
                 s = q_act.copy()
                 s[i] += delta
                 semillas.append(s)
-        lo = np.where(self.limitado, self.lo, -np.pi)
-        hi = np.where(self.limitado, self.hi, np.pi)
-        # (antes aqui se anadian 3 posturas ALEATORIAS: el rescate podia saltar a una postura
-        #  cualquiera, distinta en cada intento, y eso eran los movimientos erraticos del brazo)
-
         mejor_q, mejor_err = q_act, np.inf
         for s in semillas:
             self._fijar(self._limitar(s))
             self.resolver(obj_c, obj_m, R_obj, w_codo, iteraciones=25)
-            err = self.error(obj_c, obj_m, w_codo, R_obj)[0]
+            err = self.error(obj_c, obj_m, w_codo, None)[0]     # se compara solo la posicion
             if err < mejor_err:
                 mejor_q, mejor_err = self.d.qpos[self.qadr].copy(), err
         self._fijar(q_act)
-        mejor_q[self.i_muneca] = q_act[self.i_muneca]   # la muneca se queda como esta
         return mejor_q, mejor_err
 
 
 class RobotTron2:
-    def __init__(self, ruta_xml, escenario=None, orca=False):
-        """orca=True: quita las pinzas y monta una OrcaHand en cada muneca (mano_orca.py)."""
+    def __init__(self, ruta_xml, escenario=None, orca=False, reloj=time.monotonic):
+        """orca=True: quita las pinzas y monta una OrcaHand en cada muneca (mano_orca.py).
+        reloj: funcion que da el tiempo (time.monotonic, o un reloj simulado al reproducir)."""
         self.origen = ruta_xml
+        self.reloj = reloj
         if orca:
             import mano_orca
 
@@ -570,19 +601,19 @@ class RobotTron2:
         self.d = mujoco.MjData(self.m)
         mujoco.mj_kinematics(self.m, self.d)
         mujoco.mj_comPos(self.m, self.d)
-        self.brazos = {lado: Brazo(self.m, self.d, lado) for lado in ("L", "R")}
+        self.brazos = {lado: Brazo(self.m, self.d, lado, reloj=reloj) for lado in ("L", "R")}
         self.manos = {}
         if orca:
             for lado, brazo in self.brazos.items():
-                brazo.mano = self.manos[lado] = mano_orca.ManoOrca(self.m, self.d, lado)
+                brazo.mano = self.manos[lado] = mano_orca.ManoOrca(self.m, self.d, lado, reloj=reloj)
+                brazo.preparar_orientacion(brazo.mano.palma, brazo.mano.marco_sem_local)
         self.actualizar()
         # Orientacion del torso en el mundo (x delante, y izquierda, z arriba)
         self.R_base = self.d.xmat[self.brazos["L"].raiz].reshape(3, 3).copy()
 
     def actualizar(self):
-        """Recalcula posiciones para dibujar y para la IK. Se evita mj_forward a
-        proposito: ese hace ademas colisiones, restricciones y sensores, que aqui
-        no hacen falta y con las mallas de la pinza cuestan cientos de ms."""
+        """Recalcula posiciones para dibujar y para la IK (sin mj_forward: colisiones,
+        restricciones y sensores no hacen falta y cuestan cientos de ms)."""
         mujoco.mj_kinematics(self.m, self.d)
         mujoco.mj_comPos(self.m, self.d)
 
@@ -602,6 +633,9 @@ class RobotTron2:
                 print(f"   {n:30s} {papel:7s} [{lo:+.2f}, {hi:+.2f}] rad")
             print(f"   brazo {b.L_brazo * 100:.1f} cm | antebrazo {b.L_antebrazo * 100:.1f} cm | "
                   f"centro del hombro {np.round(b.hombro, 3)}")
+            R = b.orientacion()
+            print(f"   palma en reposo: dedos {np.round(R[:, 0], 2)} | normal {np.round(R[:, 2], 2)} "
+                  f"(cuerpo {nombre(self.m, mujoco.mjtObj.mjOBJ_BODY, b.b_orient)})")
             if b.j_pinza:
                 for n, c, a in zip(b.n_pinza, b.q_cerrado, b.q_abierto):
                     print(f"   pinza: {n:28s} cerrada {c:+.2f} -> abierta {a:+.2f}")

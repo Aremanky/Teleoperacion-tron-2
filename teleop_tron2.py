@@ -1,94 +1,89 @@
 """
-Teleoperacion de los brazos del TRON 2 (DACH_TRON2A) en MuJoCo con una OAK-D.
+Teleoperacion de los brazos del TRON 2 (DACH_TRON2A) en MuJoCo con una o dos OAK-D.
 
-Uso (desde la raiz de tron2-robot-description, con estos 4 .py copiados alli):
-  python teleop_tron2.py                     # OAK-D: RGB + profundidad
-  python teleop_tron2.py --solo-mediapipe    # OAK-D sin usar la profundidad
-  python teleop_tron2.py --webcam 0          # sin OAK-D, con una webcam normal
-  python teleop_tron2.py --modelo lite       # MediaPipe mas rapido (menos preciso)
-  python teleop_tron2.py --sin-manos         # no seguir las manos (va mas rapido)
-  python teleop_tron2.py --sin-giro          # manos solo para abrir/cerrar, sin girar la muneca
+Uso (desde la raiz del repositorio):
+  python teleop_tron2.py --camara2 --orca      # DOS OAK-D fusionadas + OrcaHand (lo habitual)
+  python teleop_tron2.py                       # una OAK-D: RGB + profundidad, pinzas originales
+  python teleop_tron2.py --solo-mediapipe      # OAK-D sin usar la profundidad
+  python teleop_tron2.py --webcam 0            # sin OAK-D, con una webcam normal
+  python teleop_tron2.py --modelo lite         # MediaPipe mas rapido (menos preciso)
+  python teleop_tron2.py --sin-manos           # no seguir las manos (va mas rapido)
+  python teleop_tron2.py --sin-giro            # manos solo para abrir/cerrar, sin orientar la muneca
   python teleop_tron2.py --escenario tuberias  # arranca ya con el escenario de tuberias a la vista
-  python teleop_tron2.py --orca              # OrcaHand en lugar de las pinzas (ver mano_orca.py)
-  python teleop_tron2.py --camara2           # DOS OAK-D: fusiona las dos vistas (ver fusion.py)
-  python teleop_tron2.py --camara2 --mxid ID_A ID_B   # idem, fijando cual es cual (python camaras.py --listar)
-  python teleop_tron2.py --proyector 0       # sin el proyector IR de las OAK-D Pro (por defecto al 70 %)
+  python teleop_tron2.py --camara2 --mxid ID_A ID_B   # fijando cual es cual (python camaras.py --listar)
+  python teleop_tron2.py --proyector 0         # sin el proyector IR de las OAK-D Pro (por defecto al 70 %)
+  python teleop_tron2.py --sin-hd              # sin el fotograma HD para las manos (si el USB no da)
+  python teleop_tron2.py ... --grabar sesion.pkl       # graba la sesion (ver grabacion.py)
+  python teleop_tron2.py --reproducir sesion.pkl --orca  # la reproduce sin camaras
 
-Las pinzas siguen a las manos: palma abierta abre la pinza, puno cerrado la
-cierra, y las posiciones intermedias se reproducen de forma proporcional.
-Ademas, al girar la mano sobre el eje del antebrazo (como al girar un pomo)
-gira la pinza. Doblar la muneca arriba/abajo o de lado NO se copia: la muneca
-del robot se queda recta y solo gira, que es mas facil de manejar.
-Cada mano manda sobre la pinza de su lado (o la contraria en modo espejo).
+QUE IMITA EL ROBOT
+  - Las DIRECCIONES de tu brazo y antebrazo (no las posiciones: tu y el robot no medis igual).
+  - La ORIENTACION COMPLETA de tu palma (los 3 grados de libertad de la muneca), comparando el
+    marco semantico de tu mano (dedos, ancho de la palma, normal) con el mismo marco de la
+    OrcaHand. Antes solo se copiaba el giro del antebrazo, y mal (ver robot_tron2.py).
+  - Los DEDOS, uno a uno (--orca): imitacion pura; con la tecla [g] se cambia al modo de
+    pinzas predefinidas del proyecto ARCTOS.
+  Cada mano manda sobre el brazo de su lado (o el contrario en modo espejo).
 
 Teclas (con la ventana de la camara seleccionada):
   q / ESC  salir
   p        pausar / reanudar (embrague: congela el robot mientras te recolocas)
+  r        devolver los brazos a la postura de reposo
   c        calibrar: de pie, QUIETO 1.5 s, brazos relajados hacia abajo. Orienta al
            operador respecto al robot. Flujo recomendado: p (pausa) -> r (reposo) ->
            colocarse -> c -> p. Con --camara2 basta con que te vea UNA camara: la
-           relacion entre camaras (que se calibra sola mientras te mueves, tambien
-           en pausa) se conserva; si te ven varias se muestra cuanto discrepan.
-           Si mueves una camara, se recalibra y se vuelve a situar sola
+           relacion entre camaras (camaras_extrinsecas.json, de calibrar_extrinseca.py, o
+           autocalibrada) se conserva
   m        modo espejo on/off (tu brazo izquierdo mueve el derecho del robot)
-  o        recentrar el giro de las munecas (la postura actual de tu mano pasa a ser la neutra)
+  g        dedos: imitacion pura <-> pinzas predefinidas (solo --orca)
   v        ver el robot desde detras / desde delante
-  r        devolver los brazos a la postura de reposo
   1        escenario de tuberias: la primera vez lo hace aparecer; despues lo reinicia
 
-Estructura: un hilo lee la camara y ejecuta MediaPipe (a lo que de el PC, ~12-25 fps)
-y el bucle principal mueve el robot a 60 Hz, suavizando los objetivos entre frames.
+Estructura: un hilo por camara lee y ejecuta MediaPipe (~12-25 fps), fusion.py junta las
+camaras y el bucle principal (clase Teleoperador) mueve el robot a 60 Hz suavizando los
+objetivos entre fotos. metricas_imitacion.py mide lo bien que imita sobre una grabacion.
 """
 import argparse
+import csv
 import time
 
 import cv2
-import mujoco
-import mujoco.viewer
 import numpy as np
 
-from camaras import CamaraOAK, CamaraWebcam, listar_oak
 import escenario_tuberias
-from fusion import CalibracionCamaras, FusionCamaras
-from robot_tron2 import RobotTron2, angulo_giro, ortonormalizar
-from seguimiento_brazos import (COLOR_LADO, PUNTOS, VIS_MIN, HiloSeguimiento,
-                                SeguidorBrazos, dibujar_esqueleto)
-from seguimiento_manos import SeguidorManos, dibujar_manos
-from suavizado import ObjetivoSuave, comprimir_alcance, suavizar
+import grabacion
+import mano_orca
+from fusion import CalibracionCamaras, FusionCamaras, cargar_extrinsecas
+from robot_tron2 import RobotTron2, ortonormalizar
+from seguimiento_brazos import COLOR_LADO, PUNTOS, VIS_MIN, LONGITUDES, dibujar_esqueleto
+from suavizado import ObjetivoSuave, RotacionSuave, comprimir_alcance
 
 VENTANA = "Seguimiento OAK-D"
 VENTANA2 = "Seguimiento OAK-D (camara 2)"
 
-# R_cam (ejes del robot en el marco de la camara) lo lleva ahora FusionCamaras
-# (fusion.R_cam): arranca con el de por defecto (camara horizontal, operador de
-# frente; con IMU, corregido con la inclinacion real) y la tecla 'c' lo recalcula.
-
 FREC_CONTROL = 60.0        # Hz del bucle del robot
-TAU_OBJETIVO = 0.06        # (ya no se usa: ver OMEGA_OBJETIVO)
-# Suavizado CONTINUO de objetivos (suavizado.py). La camara da un objetivo nuevo ~12 veces/s y el
-# robot se mueve a 60 Hz: un filtro exponencial sobre esa escalera hacia que el robot acelerase y
-# frenase en cada foto ("trompicones"). Un muelle criticamente amortiguado da posicion y velocidad
-# continuas. Constante de tiempo ~ 2/omega: 14 -> ~0.14 s (mas alto = mas rapido pero menos suave).
+# Suavizado CONTINUO de objetivos (suavizado.py): muelle criticamente amortiguado entre fotos.
+# Constante de tiempo ~ 2/omega: 14 -> ~0.14 s (mas alto = mas rapido pero menos suave).
 OMEGA_OBJETIVO = 14.0
-OMEGA_GIRO = 12.0          # idem para el giro de la muneca
-ZONA_MUERTA_OBJ = 0.004    # m: el objetivo no se mueve por temblores menores que esto (0 = sin zona muerta)
+OMEGA_ORIENT = 12.0        # idem para la orientacion de la palma
+SALTO_ORIENT = np.radians(60)   # un salto mayor del marco de la mano entre dos fotos se ignora
+                                # (salvo que se repita 3 veces: entonces es real)
+ZONA_MUERTA_OBJ = 0.004    # m: el objetivo no se mueve por temblores menores que esto
 ALCANCE_SUAVE, ALCANCE_MAX = 0.92, 0.97   # fraccion del alcance del brazo donde empieza a comprimirse
-                           # el objetivo y donde nunca pasa: con el brazo del todo estirado la IK esta en una
-                           # singularidad (tiembla y pierde precision); asi se queda un poco antes
+SALTO_LOG = 0.10           # m: si el objetivo de la muneca salta mas que esto entre dos fotos, se anota
 CADUCIDAD = 0.5            # s: si no hay datos nuevos en este tiempo, el robot se queda quieto
-W_CODO = 0.6               # peso del objetivo del codo frente al de la muneca
-ANG_RECTO = (10.0, 30.0)   # grados: con el brazo casi recto se ignora el codo (evita giros locos)
-TAU_GIRO = 0.12            # s: suavizado de la orientacion (mas alto = mas suave, mas retraso)
+W_CODO = 0.8               # peso del objetivo del codo frente al de la muneca (antes 0.6)
+# Con el brazo casi recto la direccion del codo es ruido. Antes se ignoraba hasta 10 grados y se
+# atenuaba hasta 30: un brazo relajado con 20 grados de codo salia casi recto. Con la fusion 3D
+# el ruido es menor y se puede bajar mucho.
+ANG_RECTO = (4.0, 14.0)    # grados: por debajo el codo no cuenta; por encima cuenta entero
+ZONA_MUERTA_CODO = (2.0, 8.0)   # grados de flexion que se tratan como brazo recto (se atenuan)
+CALIDAD_MIN_ORIENT = 0.2   # calidad minima de la mano para fiarse de su orientacion
 ESPEJO_M = np.diag([1.0, -1.0, 1.0])   # reflexion izquierda-derecha en el marco del robot
-ZONA_MUERTA_CODO = (5.0, 25.0)  # grados: flexiones menores se tratan como brazo recto (se atenuan)
 UMBRAL_CONGELADO = 0.08    # m: error de muneca a partir del cual se avisa de que el robot no llega
-HZ_VISOR = 30.0            # el visor de MuJoCo se refresca a esto (el control del robot va a FREC_CONTROL)
-HZ_VENTANA = 30.0          # ventana de la camara (antes 10: a eso se debian los "trompicones" de la imagen)
-HZ_VENTANA2 = 15.0         # (antes 5)
-MIN_PX_GIRO = 55           # px: con la mano mas pequena en la imagen su orientacion es ruido:
-                           # el giro de la muneca se queda como estaba
-SALTO_GIRO = np.radians(50)  # entre dos fotos la mano no gira tanto: es un error de MediaPipe
-                             # (palma vista de canto); se ignora salvo que se repita 3 veces
+HZ_VISOR = 30.0            # el visor de MuJoCo se refresca a esto
+HZ_VENTANA = 30.0          # ventana de la camara
+HZ_VENTANA2 = 15.0
 
 COLOR_CODO = [1.0, 0.85, 0.0, 0.8]    # marcador amarillo en MuJoCo
 COLOR_MUNECA = [0.1, 1.0, 0.3, 0.8]   # marcador verde en MuJoCo
@@ -96,12 +91,10 @@ OTRO_LADO = {"L": "R", "R": "L"}
 
 
 # ---------------------------------------------------------------- retargeting
-# (calibrar() vive ahora en fusion.py, junto a la calibracion promediada de las camaras)
 def enderezar(d_b, d_a):
     """Zona muerta en la flexion del codo. Con el brazo casi estirado, el ruido del
     seguimiento se convierte en pequenas flexiones en direcciones aleatorias, y el
-    robot tiene que girar mucho el hombro para seguirlas (singularidad). Por debajo
-    de 5 grados el brazo se considera recto y hasta 25 se atenua suavemente."""
+    robot tiene que girar mucho el hombro para seguirlas (singularidad)."""
     theta = float(np.arccos(np.clip(np.dot(d_b, d_a), -1.0, 1.0)))
     s = np.sin(theta)
     if s < 1e-6:
@@ -115,35 +108,45 @@ def enderezar(d_b, d_a):
 def objetivos(robot, lado_robot, datos, R_cam, espejo):
     """Direcciones del operador -> posiciones objetivo del codo y la muneca del robot."""
     brazo = robot.brazos[lado_robot]
-    d_b = R_cam @ datos["dir_brazo"]
-    d_a = R_cam @ enderezar(datos["dir_brazo"], datos["dir_antebrazo"])
+    d_b = robot.R_base @ (R_cam @ datos["dir_brazo"])
+    d_a = robot.R_base @ (R_cam @ enderezar(datos["dir_brazo"], datos["dir_antebrazo"]))
     if espejo:
-        d_b[1] *= -1
-        d_a[1] *= -1
-    d_b, d_a = robot.R_base @ d_b, robot.R_base @ d_a
+        d_b = ESPEJO_M @ d_b
+        d_a = ESPEJO_M @ d_a
     codo = brazo.hombro + brazo.L_brazo * d_b
     muneca = codo + brazo.L_antebrazo * d_a
     # brazo casi estirado = singularidad de la IK: se acorta un poco (suave, sin escalones)
     muneca = comprimir_alcance(brazo.hombro, muneca, brazo.L_brazo + brazo.L_antebrazo,
                                ALCANCE_SUAVE, ALCANCE_MAX)
-    return codo, muneca
+    return codo, muneca, d_b, d_a
 
 
-def marco_mano(robot, datos, R_cam, espejo):
-    """Orientacion de la mano del operador llevada al marco del robot.
-    En modo espejo se refleja en el plano de simetria y se le devuelve la
-    orientacion correcta invirtiendo tambien el eje transversal de la palma."""
-    R = robot.R_base @ R_cam @ datos["marco"]
+def marco_mano(robot, mano, R_cam, espejo):
+    """Marco semantico de la mano del operador (de la fusion, en el marco de salida) llevado
+    al marco del robot. None si esa mano no trae marco: entonces la IK mantiene la ultima
+    orientacion (nunca se inventa una). En modo espejo se refleja y se invierte el eje
+    transversal de la palma para que siga siendo un marco derecho."""
+    R_mano = None if not isinstance(mano, dict) else mano.get("marco")
+    if R_mano is None:
+        return None
+    R_mano = np.asarray(R_mano, dtype=float)
+    if R_mano.shape != (3, 3) or not np.all(np.isfinite(R_mano)) or abs(np.linalg.det(R_mano)) < 1e-3:
+        return None
+    R = robot.R_base @ R_cam @ R_mano
     if espejo:
         R = ESPEJO_M @ R @ np.diag([1.0, -1.0, 1.0])
     return ortonormalizar(R)
 
 
 def peso_codo(datos):
-    """Con el brazo casi estirado la 'direccion del codo' es puro ruido: se le quita peso."""
+    """Con el brazo casi estirado la 'direccion del codo' es ruido: se atenua."""
     coseno = np.clip(np.dot(datos["dir_brazo"], datos["dir_antebrazo"]), -1.0, 1.0)
-    angulo = np.degrees(np.arccos(coseno))
-    return W_CODO * float(np.clip((angulo - ANG_RECTO[0]) / (ANG_RECTO[1] - ANG_RECTO[0]), 0.0, 1.0))
+    angulo = float(np.arccos(coseno))
+    lo, hi = np.radians(ANG_RECTO)
+    if angulo <= lo:
+        return 0.0
+    x = np.clip((angulo - lo) / (hi - lo), 0.0, 1.0)
+    return W_CODO * float(0.05 + 0.95 * x * x * (3.0 - 2.0 * x))
 
 
 # ---------------------------------------------------------------- visor MuJoCo
@@ -160,6 +163,7 @@ def colocar_camara(v, robot, desde_detras=True):
 
 
 def dibujar_marcadores(escena, marcadores):
+    import mujoco
     escena.ngeom = 0
     for pos, rgba in marcadores:
         if escena.ngeom >= escena.maxgeom:
@@ -186,6 +190,7 @@ def colorear_profundidad(depth):
 
 
 def componer_vista(snap, estado):
+    from seguimiento_manos import dibujar_manos
     img = snap["bgr"].copy()
     lm2d, brazos, depth = snap["lm2d"], snap["brazos"], snap["depth"]
     dibujar_esqueleto(img, lm2d)
@@ -194,7 +199,6 @@ def componer_vista(snap, estado):
     h, w = img.shape[:2]
 
     if depth is not None:  # miniatura de la profundidad (arriba a la derecha)
-        # primero se reduce y despues se colorea: 16 veces menos pixeles que antes
         pequena = cv2.resize(depth, (w // 4, h // 4), interpolation=cv2.INTER_NEAREST)
         mini = cv2.flip(colorear_profundidad(pequena), 1)
         img[8:8 + h // 4, w - 8 - w // 4:w - 8] = mini
@@ -205,7 +209,7 @@ def componer_vista(snap, estado):
             if vis >= VIS_MIN:
                 texto(img, "IZQ" if lado == "L" else "DER", (int(w - 1 - u) + 10, int(v)), COLOR_LADO[lado])
 
-    for k, lado in enumerate(("L", "R")):   # barras de apertura de cada pinza
+    for k, lado in enumerate(("L", "R")):   # barras de apertura de cada mano
         a = estado["pinzas"].get(lado)
         x0, y0 = 10 + 130 * k, h - 46
         cv2.rectangle(img, (x0, y0), (x0 + 110, y0 + 14), (0, 0, 0), -1)
@@ -213,12 +217,13 @@ def componer_vista(snap, estado):
             cv2.rectangle(img, (x0 + 1, y0 + 1), (x0 + 1 + int(108 * a), y0 + 13),
                           (int(60 * (1 - a)), int(70 + 160 * a), int(235 - 175 * a)), -1)
         etiqueta = "IZQ" if lado == "L" else "DER"
-        texto(img, f"pinza {etiqueta} {'--' if a is None else f'{a * 100:3.0f}%'}",
+        texto(img, f"mano {etiqueta} {'--' if a is None else f'{a * 100:3.0f}%'}",
               (x0, y0 - 4), escala=0.42)
 
     lineas = [f"Camara {estado.get('fps_cam', 0.0):3.0f} fps | seguimiento {estado['fps_seg']:4.1f} fps | robot {estado['fps_control']:3.0f} Hz | "
               f"{'PAUSA' if estado['pausado'] else 'TELEOP'} | {'espejo' if estado['espejo'] else 'directo'} | "
-              f"{'calibrado' if estado['calibrado'] else 'sin calibrar'}"]
+              f"{'calibrado' if estado['calibrado'] else 'sin calibrar'}"
+              + (f" | dedos: {estado['modo_dedos']}" if estado.get("modo_dedos") else "")]
     fu = snap.get("fusion")
     varias = bool(fu) and fu.get("n_camaras", 1) > 1
     if varias:
@@ -229,6 +234,7 @@ def componer_vista(snap, estado):
                       + "".join(f" | {c}: izq/der corregido" for c in fu.get("cruzadas", [])))
     if fu:
         lineas += fu.get("avisos", [])
+    lineas.append(f"Operador: {LONGITUDES.texto()}")
     for lado in ("L", "R"):
         nombre = "IZQ" if lado == "L" else "DER"
         mano = snap["aperturas"].get(lado)
@@ -236,37 +242,36 @@ def componer_vista(snap, estado):
             extra = f" | mano {mano['apertura'] * 100:3.0f}%"
             if mano.get("bruto") is not None:
                 extra += f" (bruto {mano['bruto']:.2f})"
-            if varias and mano.get("cam"):
-                extra += f" cam {mano['cam']}"
+            if mano.get("fuente_mano"):
+                extra += f" {mano['fuente_mano']}"
+            if mano.get("calidad") is not None:
+                extra += f" cal {mano['calidad']:.2f}"
         else:
             extra = " | mano no vista"
         lineas.append(f"Operador {nombre}: "
                       f"{brazos[lado]['fuente'] if lado in brazos else 'no detectado'}{extra}")
     for lado in ("L", "R"):
         if lado in estado["errores"]:
-            ec, em, _ = estado["errores"][lado]
-            giro = estado["giros"].get(lado)
-            lineas.append(f"Robot {lado}: error codo {ec * 1000:3.0f} mm | muneca {em * 1000:3.0f} mm"
-                          + (f" | giro muneca {np.degrees(giro):+4.0f} deg" if giro is not None else ""))
+            ec, em, eo = estado["errores"][lado]
+            lineas.append(f"Robot {lado}: error codo {ec * 1000:3.0f} mm | muneca {em * 1000:3.0f} mm | "
+                          f"palma {np.degrees(eo):3.0f} deg"
+                          + (" | orientacion: " + estado["orient"][lado] if estado["orient"].get(lado) else ""))
     if estado.get("escena"):
         lineas.append(estado["escena"])
     if estado["mensaje"]:
         lineas.append(estado["mensaje"])
     for k, s in enumerate(lineas):
         texto(img, s, (10, 22 + 22 * k))
-    # avisos en ROJO: por que un brazo del robot se ha quedado quieto
     for k, (lado, motivo) in enumerate(sorted(estado.get("congelado", {}).items())):
         texto(img, f"Robot {'IZQ' if lado == 'L' else 'DER'} QUIETO: {motivo}",
               (10, 22 + 22 * (len(lineas) + k)), (0, 0, 255))
-    texto(img, "q salir | p pausa | c calibrar | o recentrar giro | m espejo | v vista | r reposo | 1 tuberias",
+    texto(img, "q salir | p pausa | c calibrar | r reposo | m espejo | g dedos | v vista | 1 tuberias",
           (10, h - 12), escala=0.42)
     return img
 
 
 def vista_fluida(hilo, snap):
-    """Copia de 'snap' con la imagen EN BRUTO mas reciente de la camara (a 30 fps) y el
-    esqueleto de MediaPipe encima (el ultimo que haya, a ~12 fps). Asi la ventana va fluida
-    aunque el seguimiento vaya mas lento."""
+    """Copia de 'snap' con la imagen EN BRUTO mas reciente de la camara y el esqueleto encima."""
     crudo = hilo.ultimo_crudo()
     if snap is None or crudo is None:
         return snap
@@ -276,7 +281,7 @@ def vista_fluida(hilo, snap):
 
 
 def componer_vista_secundaria(snap, fps_cam, fps):
-    """Segunda camara: imagen con el esqueleto y las manos detectadas, nada mas."""
+    from seguimiento_manos import dibujar_manos
     img = snap["bgr"].copy()
     dibujar_esqueleto(img, snap["lm2d"])
     dibujar_manos(img, snap.get("manos") or [])
@@ -287,10 +292,8 @@ def componer_vista_secundaria(snap, fps_cam, fps):
 
 
 # ---------------------------------------------------------------- calibracion
-def aplicar_calibracion(calib, fusion, estado):
-    """Aplica el resultado de una CalibracionCamaras a la fusion. Devuelve el mensaje.
-    Basta con que te vea UNA camara: la relacion entre camaras se conserva."""
-    res = calib.resultado()
+def aplicar_calibracion(res, fusion, estado):
+    """Aplica el resultado de una CalibracionCamaras a la fusion. Devuelve el mensaje."""
     letras = "ABCD"
     for k, (R, n, disp, motivo, ang) in enumerate(res):
         print(f"[calibracion] camara {letras[k]}: {n} frames"
@@ -312,14 +315,325 @@ def aplicar_calibracion(calib, fusion, estado):
         partes.append("relacion entre camaras conservada")
     if info["discrepancia"] is not None:
         partes.append(f"las camaras coinciden a {info['discrepancia']:.1f} deg")
-        print(f"[calibracion] discrepancia entre camaras: {info['discrepancia']:.1f} deg")
     falta = [letras[k] for k in range(len(res)) if not fusion.valida[k]]
     if falta:
         partes.append(f"{'+'.join(falta)} se calibrara sola: mueve los brazos")
     return " | ".join(partes) + f" | dispersion {disp:.1f} deg{aviso}"
 
 
-# ---------------------------------------------------------------- bucle principal
+# ---------------------------------------------------------------- teleoperador
+class Teleoperador:
+    """Un ciclo de teleoperacion = paso(t, dt): fusion -> objetivos -> IK -> manos -> escena.
+    No toca el visor ni las ventanas: lo usan main() (en tiempo real) y
+    metricas_imitacion.py (sin visor, a toda velocidad, con reloj simulado)."""
+
+    def __init__(self, robot, fusion, escena, hilos, girar=True, grabadora=None, metricas=None,
+                 reloj=time.monotonic, log_csv=None, eventos=None):
+        self.robot, self.fusion, self.escena, self.hilos = robot, fusion, escena, hilos
+        self.girar, self.grabadora, self.metricas, self.reloj = girar, grabadora, metricas, reloj
+        self.R_cam = fusion.R_cam
+        self.estado = dict(fps_seg=0.0, fps_control=0.0, pausado=False, espejo=False, calibrado=False,
+                           errores={}, mensaje="", pinzas={}, orient={}, congelado={}, modo_dedos="")
+        if robot.manos:
+            self.estado["modo_dedos"] = "imitacion" if not next(iter(robot.manos.values())).estado["pinza_habilitada"] else "pinzas"
+        self.suaves = {}          # lado del robot -> objetivos suavizados {codo, muneca, w, R}
+        self.calib = None         # CalibracionCamaras en curso (tecla c)
+        self.t_mensaje = 0.0
+        self.n_mano = -1
+        self.ult_obj, self.n_log = {}, {}
+        self.t_sin_brazos, self.t_diag = None, -1e9
+        self.congelado_ant, self.t_lejos = {}, {}
+        self.eventos = sorted(eventos or [], key=lambda e: e[0])   # reproduccion: (t, nombre, datos)
+        self.gancho = None
+        self.t_log0 = reloj()
+        self._f_csv = open(log_csv, "w", newline="", encoding="utf-8") if log_csv else None
+        self._w_csv = csv.writer(self._f_csv) if self._f_csv else None
+        if self._w_csv:
+            self._w_csv.writerow(["t_s", "lado_robot", "foto", "camaras", "modo", "fuente", "desacuerdo_deg", "cruzadas",
+                                  "codo_x", "codo_y", "codo_z", "muneca_x", "muneca_y", "muneca_z",
+                                  "salto_m", "err_codo_m", "err_muneca_m", "err_palma_deg", "fuente_mano"])
+
+    # ------------------------------------------------------------ eventos
+    def _evento(self, nombre, **datos):
+        if self.grabadora is not None:
+            self.grabadora.evento(nombre, **datos)
+
+    def _aplicar_eventos(self, t0):
+        """Reproduccion: aplica los eventos grabados cuyo instante ya ha llegado."""
+        while self.eventos and self.eventos[0][0] <= t0:
+            _, nombre, d = self.eventos.pop(0)
+            if nombre == "calibracion":
+                res = [(None if R is None else np.asarray(R), n, disp, mot, ang)
+                       for R, n, disp, mot, ang in d["resultado"]]
+                self.estado["mensaje"] = aplicar_calibracion(res, self.fusion, self.estado)
+                self.t_mensaje = t0 + 4.0
+            elif nombre == "pausa":
+                self.estado["pausado"] = bool(d["pausado"])
+            elif nombre == "espejo":
+                self.estado["espejo"] = bool(d["espejo"])
+                self._reiniciar_objetivos()
+            elif nombre == "reposo":
+                self.reposo()
+            elif nombre == "modo_dedos":
+                self.modo_dedos(bool(d["pinzas"]))
+
+    # ------------------------------------------------------------ acciones (teclas)
+    def _reiniciar_objetivos(self):
+        self.suaves.clear()
+        self.estado["errores"].clear()
+        self.estado["pinzas"].clear()
+        self.estado["orient"].clear()
+
+    def reposo(self):
+        self.robot.reposo()
+        self._reiniciar_objetivos()
+
+    def modo_dedos(self, pinzas):
+        for mano in self.robot.manos.values():
+            mano.modo_pinza(pinzas)
+        self.estado["modo_dedos"] = "pinzas" if pinzas else "imitacion"
+
+    def tecla(self, tecla, t0, visor=None):
+        """Devuelve True si hay que salir."""
+        if tecla in (ord("q"), 27):
+            return True
+        if tecla == ord("p"):
+            self.estado["pausado"] = not self.estado["pausado"]
+            self._evento("pausa", pausado=self.estado["pausado"])
+        elif tecla == ord("m"):
+            self.estado["espejo"] = not self.estado["espejo"]
+            self._reiniciar_objetivos()
+            self._evento("espejo", espejo=self.estado["espejo"])
+        elif tecla == ord("g") and self.robot.manos:
+            self.modo_dedos(self.estado["modo_dedos"] != "pinzas")
+            self._evento("modo_dedos", pinzas=self.estado["modo_dedos"] == "pinzas")
+            self.estado["mensaje"] = f"Dedos: {self.estado['modo_dedos']}"
+            self.t_mensaje = t0 + 2.0
+        elif tecla == ord("1") and self.escena is not None:
+            self.estado["mensaje"] = ("Escenario de tuberias reiniciado" if self.escena.activa
+                                      else "Escenario de tuberias")
+            self.escena.activar(visor)
+            self.t_mensaje = t0 + 2.0
+        elif tecla == ord("r"):
+            self.reposo()
+            self._evento("reposo")
+        elif tecla == ord("c"):
+            self.calib = CalibracionCamaras(self.hilos, fusion=self.fusion, reloj=self.reloj)
+        return False
+
+    # ------------------------------------------------------------ ciclo
+    def paso(self, t0, dt):
+        """Un ciclo del bucle de control. Devuelve (snap, marcadores para el visor)."""
+        estado, fusion, robot, escena = self.estado, self.fusion, self.robot, self.escena
+        self._aplicar_eventos(t0)
+        if self.calib is not None:
+            self.calib.alimentar()
+            estado["mensaje"] = f"Calibrando: quieto, brazos colgando ({self.calib.restante():.1f} s)"
+            self.t_mensaje = t0 + 0.5
+            if self.calib.terminada():
+                res = self.calib.resultado()
+                estado["mensaje"] = aplicar_calibracion(res, fusion, estado)
+                self._evento("calibracion", resultado=[(None if R is None else np.asarray(R).tolist(), n, disp, mot, ang)
+                                                       for R, n, disp, mot, ang in res])
+                self.t_mensaje = t0 + 6.0
+                self.calib = None
+
+        snap = fusion.ultimo()
+        if fusion.R_cam is not self.R_cam:   # calibracion nueva (o inclinacion de la IMU)
+            self.R_cam = fusion.R_cam
+        R_cam = self.R_cam
+        fresco = snap is not None and t0 - snap["t"] < CADUCIDAD
+        brazos = snap["brazos"] if fresco else {}
+        aperturas = snap["aperturas"] if fresco else {}
+        if brazos:
+            self.t_sin_brazos = None
+        elif self.t_sin_brazos is None:
+            self.t_sin_brazos = t0
+        elif t0 - self.t_sin_brazos > 2.0 and t0 - self.t_diag > 2.0:
+            self.t_diag = t0
+            print(f"[diagnostico] sin brazos desde hace {t0 - self.t_sin_brazos:.0f} s"
+                  f"{' (sin datos frescos)' if not fresco else ''}:\n{fusion.diagnostico()}")
+
+        # Diagnostico: por que se queda quieto cada brazo (se muestra en rojo)
+        estado["congelado"] = {}
+        if not estado["pausado"]:
+            for lado_r in ("L", "R"):
+                lado_h = OTRO_LADO[lado_r] if estado["espejo"] else lado_r
+                err = estado["errores"].get(lado_r)
+                if not fresco:
+                    motivo = "sin datos nuevos de la camara"
+                elif lado_h not in brazos:
+                    motivo = f"no se ve tu brazo {'IZQ' if lado_h == 'L' else 'DER'}"
+                elif err is not None and err[1] > UMBRAL_CONGELADO:
+                    self.t_lejos[lado_r] = self.t_lejos.get(lado_r, 0.0) + dt
+                    if self.t_lejos[lado_r] < 0.5:
+                        continue
+                    motivo = f"no llega al objetivo (error muneca {err[1] * 100:.0f} cm)"
+                else:
+                    self.t_lejos[lado_r] = 0.0
+                    continue
+                estado["congelado"][lado_r] = motivo
+        if estado["congelado"] != self.congelado_ant:
+            for lado_r, motivo in estado["congelado"].items():
+                print(f"[{time.strftime('%H:%M:%S')}] robot {lado_r} quieto: {motivo}")
+            self.congelado_ant = dict(estado["congelado"])
+
+        marcadores = []
+        if not estado["pausado"]:
+            foto_nueva = fresco and snap["n"] != self.n_mano
+            if foto_nueva:
+                self.n_mano = snap["n"]
+            # El objetivo se recalcula en CADA ciclo con la ultima medida y el muelle lo sigue:
+            # movimiento continuo a 60 Hz en lugar de un salto por cada foto de la camara.
+            for lado_h, datos in brazos.items():
+                lado_r = OTRO_LADO[lado_h] if estado["espejo"] else lado_h
+                codo, muneca, d_b, d_a = objetivos(robot, lado_r, datos, R_cam, estado["espejo"])
+                w = peso_codo(datos)
+                if lado_r not in self.suaves:
+                    self.suaves[lado_r] = dict(
+                        f_codo=ObjetivoSuave(OMEGA_OBJETIVO, ZONA_MUERTA_OBJ),
+                        f_muneca=ObjetivoSuave(OMEGA_OBJETIVO, ZONA_MUERTA_OBJ),
+                        f_w=ObjetivoSuave(OMEGA_OBJETIVO), f_R=RotacionSuave(OMEGA_ORIENT, SALTO_ORIENT),
+                        R_h=None, fuente_mano=None)
+                s = self.suaves[lado_r]
+                s["codo"] = s["f_codo"].actualizar(codo, dt)
+                s["muneca"] = s["f_muneca"].actualizar(muneca, dt)
+                s["w"] = float(s["f_w"].actualizar(w, dt))
+                s["d_b"], s["d_a"] = d_b, d_a
+                # orientacion de la palma: del marco de la mano (una vez por foto)
+                mano = aperturas.get(lado_h)
+                if foto_nueva and self.girar and mano is not None:
+                    R_h = marco_mano(robot, mano, R_cam, estado["espejo"])
+                    cal = float(mano.get("calidad", 1.0))
+                    fiable = R_h is not None and (cal >= CALIDAD_MIN_ORIENT or str(mano.get("fuente_mano", "")).startswith("3D"))
+                    if fiable:
+                        s["f_R"].fijar_objetivo(R_h)
+                        s["R_h"], s["fuente_mano"] = R_h, mano.get("fuente_mano")
+                        estado["orient"][lado_r] = f"{mano.get('fuente_mano', '')} cal {cal:.2f}"
+                    elif R_h is not None:
+                        estado["orient"][lado_r] = f"mano poco fiable (cal {cal:.2f}): se mantiene"
+                if foto_nueva:
+                    self._diagnostico_salto(snap, lado_r, lado_h, muneca, codo, datos, s)
+            # un brazo que deja de verse mantiene su ultimo objetivo (el muelle termina de frenar)
+            vistos = {OTRO_LADO[l] if estado["espejo"] else l for l in brazos}
+            for lado_r, s in self.suaves.items():
+                if lado_r not in vistos:
+                    s["codo"] = s["f_codo"].actualizar(s["f_codo"].ancla, dt)
+                    s["muneca"] = s["f_muneca"].actualizar(s["f_muneca"].ancla, dt)
+            # dedos / pinzas: una vez por foto
+            for lado_h, mano in aperturas.items():
+                lado_r = OTRO_LADO[lado_h] if estado["espejo"] else lado_h
+                brazo = robot.brazos[lado_r]
+                if brazo.mano is not None:              # OrcaHand
+                    if foto_nueva:
+                        if mano.get("mundo") is not None:   # dedo a dedo
+                            brazo.mano.nuevo_objetivo(mano["mundo"], espejar=(lado_h == "L"))
+                        else:                               # solo abrir / cerrar
+                            brazo.mano.objetivo_por_apertura(mano["apertura"])
+                else:                                   # pinza original
+                    minimo = escena.apertura_minima(lado_r) if escena else 0.0
+                    brazo.mover_pinza(max(mano["apertura"], minimo), dt)
+                estado["pinzas"][lado_r] = mano["apertura"]
+            for lado_r, orca in robot.manos.items():
+                sujeta = escena is not None and escena.activa and escena.sujeta == lado_r
+                orca.mover(dt, mano_orca.TOPE_TUBO if sujeta else None)
+            # IK: posicion (codo + muneca) y orientacion de la palma, suavizadas
+            for lado_r, s in self.suaves.items():
+                brazo = robot.brazos[lado_r]
+                R_s = s["f_R"].actualizar(dt)
+                estado["errores"][lado_r] = brazo.seguir(s["codo"], s["muneca"], dt, s["w"], R_obj=R_s)
+                marcadores += [(s["codo"], COLOR_CODO), (s["muneca"], COLOR_MUNECA)]
+                if self.metricas is not None and foto_nueva and lado_r in vistos:
+                    lado_h = OTRO_LADO[lado_r] if estado["espejo"] else lado_r
+                    self.metricas.registrar(t0, lado_r, s["d_b"], s["d_a"], s.get("R_h"), brazo,
+                                            estado["errores"][lado_r], t0 - snap.get("t_captura", snap["t"]),
+                                            snap["n"], brazos[lado_h]["fuente"], s.get("fuente_mano"))
+
+        robot.actualizar()
+        if escena is not None:          # la pieza sigue a la pinza, encaja o cae
+            escena.actualizar(robot, estado["pinzas"], dt)
+            robot.actualizar()
+        estado["fps_control"] = 0.95 * estado["fps_control"] + 0.05 / max(dt, 1e-3)
+        if t0 > self.t_mensaje:
+            estado["mensaje"] = ""
+        if self.gancho is not None:       # pruebas: comparar con una verdad conocida
+            self.gancho(t0, snap)
+        return snap, marcadores
+
+    def _diagnostico_salto(self, snap, lado_r, lado_h, muneca, codo, datos, s):
+        fu_l = snap.get("fusion") or {}
+        ant = self.ult_obj.get(lado_r)
+        salto = 0.0 if ant is None else float(np.linalg.norm(muneca - ant))
+        self.ult_obj[lado_r] = np.array(muneca, dtype=float)
+        des_l = fu_l.get("desacuerdo", {}).get(lado_h, 0.0)
+        if salto > SALTO_LOG:
+            print(f"[SALTO {time.strftime('%H:%M:%S')}] muneca {lado_r} {salto * 100:.0f} cm en una foto | "
+                  f"camaras {'+'.join(fu_l.get('activas', [])) or '--'} | modo {fu_l.get('modo', '?')} | "
+                  f"fuente {datos['fuente']} | desacuerdo {des_l:.0f} deg")
+        if self._w_csv:
+            er = self.estado["errores"].get(lado_r, (np.nan, np.nan, np.nan))
+            self._w_csv.writerow([f"{self.reloj() - self.t_log0:.3f}", lado_r, snap["n"],
+                                  "+".join(fu_l.get("activas", [])), fu_l.get("modo", ""), datos["fuente"],
+                                  f"{des_l:.1f}", ",".join(fu_l.get("cruzadas", [])),
+                                  *[f"{x:.4f}" for x in codo], *[f"{x:.4f}" for x in muneca],
+                                  f"{salto:.4f}", f"{er[0]:.4f}", f"{er[1]:.4f}", f"{np.degrees(er[2]):.1f}",
+                                  s.get("fuente_mano") or ""])
+
+    def cerrar(self):
+        if self._f_csv:
+            self._f_csv.close()
+        if self.grabadora is not None:
+            self.grabadora.guardar()
+
+    # ------------------------------------------------------------ sin visor (metricas)
+    def correr_sin_visor(self, frec=FREC_CONTROL):
+        """Reproduccion a toda velocidad con reloj simulado (self.reloj debe ser un RelojSimulado)."""
+        dt = 1.0 / frec
+        while not all(h.terminado() for h in self.hilos):
+            t0 = self.reloj()
+            self.paso(t0, dt)
+            self.reloj.avanzar(dt)
+
+
+class RelojSimulado:
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def avanzar(self, dt):
+        self.t += dt
+
+
+# ---------------------------------------------------------------- montaje
+def crear_robot(xml, orca, reloj=time.monotonic):
+    robot = RobotTron2(xml, escenario_tuberias.anadir_al_modelo, orca=orca, reloj=reloj)
+    escena = escenario_tuberias.EscenarioTuberias(robot)
+    robot.resumen()
+    return robot, escena
+
+
+def preparar_reproduccion(ruta, xml, orca, velocidad=1.0, metricas=None, sin_extrinsecas=False, reloj=None,
+                          log_csv=None):
+    """Teleoperador que reproduce una sesion grabada. Con reloj=None se usa un RelojSimulado
+    (para metricas, a toda velocidad); con time.monotonic va en tiempo real x velocidad."""
+    datos = grabacion.cargar(ruta)
+    reloj_sim = reloj is None
+    reloj = RelojSimulado() if reloj_sim else reloj
+    robot, escena = crear_robot(xml, orca, reloj=reloj)
+    hilos, eventos = grabacion.hilos_reproduccion(datos, reloj=reloj, velocidad=1.0 if reloj_sim else velocidad)
+    meta = datos.get("meta", {})
+    extr = None
+    if len(hilos) > 1 and not sin_extrinsecas and meta.get("extrinsecas") is not None:
+        extr = (np.asarray(meta["extrinsecas"][0]), np.asarray(meta["extrinsecas"][1]))
+    fusion = FusionCamaras(hilos, reloj=reloj, extrinsecas=extr)
+    print(f"[reproduccion] {ruta}: {len(hilos)} camara(s), {len(eventos)} eventos"
+          + (", extrinsecas ChArUco" if extr is not None else ""))
+    return Teleoperador(robot, fusion, escena, hilos, girar=True, metricas=metricas, reloj=reloj, eventos=eventos,
+                        log_csv=log_csv)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Teleoperacion de los brazos del TRON 2 con OAK-D")
     ap.add_argument("--xml", default="tron2a/DACH_TRON2A/xml/robot_elecnor.xml")
@@ -327,67 +641,76 @@ def main():
     ap.add_argument("--solo-mediapipe", action="store_true", help="no usar la profundidad de la OAK-D")
     ap.add_argument("--modelo", default="full", choices=["lite", "full", "heavy"])
     ap.add_argument("--sin-manos", action="store_true", help="no seguir las manos ni mover las pinzas")
-    ap.add_argument("--sin-giro", action="store_true", help="no orientar la pinza con la mano")
-    ap.add_argument("--escenario", choices=["tuberias"], default=None,
-                    help="anade un escenario de trabajo alrededor del robot")
+    ap.add_argument("--sin-giro", action="store_true", help="no orientar la palma con la mano")
+    ap.add_argument("--escenario", choices=["tuberias"], default=None)
     ap.add_argument("--orca", action="store_true", help="OrcaHand en lugar de las pinzas")
     ap.add_argument("--camara2", action="store_true", help="usar dos OAK-D y fusionar las vistas")
-    ap.add_argument("--sin-imu", action="store_true",
-                    help="no usar la IMU de las OAK-D (si da problemas; la fusion sigue funcionando)")
-    ap.add_argument("--proyector", type=float, default=0.7,
-                    help="intensidad 0-1 del proyector IR de las OAK-D Pro (0 = apagado)")
-    ap.add_argument("--sin-manos-b", action="store_true",
-                    help="con --camara2: la camara B no sigue las manos (solo cuerpo). Libera mucha CPU "
-                         "si el seguimiento va lento; las manos se leen solo con la camara A")
-    ap.add_argument("--sin-estereo-fino", action="store_true",
-                    help="no activar subpixel / comprobacion izq-der / mediana en el estereo de las OAK-D")
-    ap.add_argument("--mxid", nargs=2, metavar=("ID_A", "ID_B"), default=None,
-                    help="ids de las dos OAK-D (camara principal, secundaria); ver python camaras.py --listar")
+    ap.add_argument("--sin-imu", action="store_true", help="no usar la IMU de las OAK-D")
+    ap.add_argument("--proyector", type=float, default=0.7, help="intensidad 0-1 del proyector IR (0 = apagado)")
+    ap.add_argument("--sin-manos-b", action="store_true", help="con --camara2: la camara B no sigue las manos")
+    ap.add_argument("--sin-estereo-fino", action="store_true")
+    ap.add_argument("--sin-hd", action="store_true", help="no pedir el fotograma HD para las manos")
+    ap.add_argument("--sin-recorte", action="store_true", help="Hand Landmarker sobre la imagen entera (como antes)")
+    ap.add_argument("--extrinsecas", default=None, metavar="ARCHIVO")
+    ap.add_argument("--sin-extrinsecas", action="store_true")
+    ap.add_argument("--log-csv", default=None, metavar="ARCHIVO")
+    ap.add_argument("--mxid", nargs=2, metavar=("ID_A", "ID_B"), default=None)
+    ap.add_argument("--grabar", default=None, metavar="ARCHIVO", help="graba la sesion (grabacion.py)")
+    ap.add_argument("--grabar-video", action="store_true", help="con --grabar: tambien los fotogramas (JPEG)")
+    ap.add_argument("--reproducir", default=None, metavar="ARCHIVO", help="reproduce una sesion grabada, sin camaras")
+    ap.add_argument("--velocidad", type=float, default=1.0, help="con --reproducir: veces el tiempo real")
     args = ap.parse_args()
     if args.camara2 and args.webcam is not None:
         ap.error("--camara2 es para dos OAK-D, no se combina con --webcam")
-    if args.orca:
-        import mano_orca
 
-    # El escenario de tuberias siempre se carga, pero oculto; la tecla 1 lo muestra.
-    robot = RobotTron2(args.xml, escenario_tuberias.anadir_al_modelo, orca=args.orca)
-    escena = escenario_tuberias.EscenarioTuberias(robot)
-    robot.resumen()
-    girar = not (args.sin_manos or args.sin_giro)
-    ids = [None]
-    if args.camara2:
-        ids = list(args.mxid) if args.mxid else [i for i, _ in listar_oak()[:2]]
-        if len(ids) < 2:
-            raise SystemExit(f"--camara2 necesita dos OAK-D libres y solo veo {len(ids)} (python camaras.py --listar)")
-        print("Camara A:", ids[0], "| Camara B:", ids[1])
-    camaras, hilos = [], []
-    for k_cam, ident in enumerate(ids):   # una instancia COMPLETA de seguimiento por camara (no se comparten detectores)
-        seg_k = SeguidorBrazos(args.modelo, usar_profundidad=not args.solo_mediapipe)
-        sin_manos_k = args.sin_manos or (args.sin_manos_b and k_cam > 0)
-        manos_k = None if sin_manos_k else SeguidorManos()
-        cam_k = (CamaraWebcam(args.webcam) if args.webcam is not None else
-                 CamaraOAK(mxid=ident, proyector=args.proyector, usar_imu=not args.sin_imu,
-                           estereo_fino=not args.sin_estereo_fino))
-        hilo_k = HiloSeguimiento(cam_k, seg_k, manos_k)
-        camaras.append(cam_k)
-        hilos.append(hilo_k)
-    for hilo_k in hilos:
-        hilo_k.start()
-    fusion = FusionCamaras(hilos)   # con una sola camara se comporta como antes
+    import mujoco.viewer
 
-    R_cam = fusion.R_cam
-    estado = dict(fps_seg=0.0, fps_control=0.0, pausado=False, espejo=False, calibrado=False,
-                  errores={}, mensaje="", pinzas={}, giros={})
-    suaves = {}           # lado del robot -> objetivos suavizados {codo, muneca, w, R}
-    t_sin_brazos, t_diag = None, -1e9   # para el diagnostico en consola
-    perfil, t_perfil = {}, time.monotonic()   # ms por seccion del bucle (si va lento se informa)
+    if args.reproducir:
+        tele = preparar_reproduccion(args.reproducir, args.xml, args.orca, velocidad=args.velocidad,
+                                     sin_extrinsecas=args.sin_extrinsecas, reloj=time.monotonic, log_csv=args.log_csv)
+        hilos, camaras = tele.hilos, []
+    else:
+        from camaras import CamaraOAK, CamaraWebcam, listar_oak
+        from seguimiento_brazos import HiloSeguimiento, SeguidorBrazos
+        from seguimiento_manos import SeguidorManos
+        robot, escena = crear_robot(args.xml, args.orca)
+        ids = [None]
+        if args.camara2:
+            ids = list(args.mxid) if args.mxid else [i for i, _ in listar_oak()[:2]]
+            if len(ids) < 2:
+                raise SystemExit(f"--camara2 necesita dos OAK-D libres y solo veo {len(ids)} (python camaras.py --listar)")
+            print("Camara A:", ids[0], "| Camara B:", ids[1])
+        grabadora = None
+        if args.grabar:
+            grabadora = grabacion.Grabadora(args.grabar, con_video=args.grabar_video,
+                                            meta=dict(camaras=ids, orca=args.orca, xml=args.xml))
+        camaras, hilos = [], []
+        for k_cam, ident in enumerate(ids):   # una instancia COMPLETA de seguimiento por camara
+            seg_k = SeguidorBrazos(args.modelo, usar_profundidad=not args.solo_mediapipe)
+            sin_manos_k = args.sin_manos or (args.sin_manos_b and k_cam > 0)
+            manos_k = None if sin_manos_k else SeguidorManos(recorte=not args.sin_recorte)
+            cam_k = (CamaraWebcam(args.webcam) if args.webcam is not None else
+                     CamaraOAK(mxid=ident, proyector=args.proyector, usar_imu=not args.sin_imu,
+                               estereo_fino=not args.sin_estereo_fino, hd=not args.sin_hd))
+            hilo_k = HiloSeguimiento(cam_k, seg_k, manos_k, grabadora=grabadora, etiqueta="ABCD"[k_cam])
+            camaras.append(cam_k)
+            hilos.append(hilo_k)
+        for hilo_k in hilos:
+            hilo_k.start()
+        extr = None
+        if args.camara2 and not args.sin_extrinsecas:
+            extr = cargar_extrinsecas(ids[0], ids[1], args.extrinsecas)
+            if extr is not None and grabadora is not None:
+                grabadora.meta["extrinsecas"] = (np.asarray(extr[0]).tolist(), np.asarray(extr[1]).tolist())
+        fusion = FusionCamaras(hilos, extrinsecas=None if extr is None else (extr[0], extr[1]))
+        tele = Teleoperador(robot, fusion, escena, hilos, girar=not (args.sin_manos or args.sin_giro),
+                            grabadora=grabadora, log_csv=args.log_csv)
+
+    robot, escena, estado = tele.robot, tele.escena, tele.estado
+    perfil, t_perfil = {}, time.monotonic()
     t_sync, t_ventana, t_ventana2 = -1e9, -1e9, -1e9
-    giros = {}            # lado del robot -> {"A0": mano neutra, "q0": giro neutro, "obj": objetivo}
     desde_detras = True
-    calib = None          # CalibracionCamaras en curso (tecla c)
-    t_mensaje, n_mostrado, n_mano = 0.0, -1, -1
-    n_mostrado2, t_aviso_negra = -1, -1e9
-    congelado_ant, t_lejos = {}, {}
+    n_mostrado, n_mostrado2, t_aviso_negra = -1, -1, -1e9
     cv2.namedWindow(VENTANA, cv2.WINDOW_NORMAL)
     if len(hilos) > 1:
         cv2.namedWindow(VENTANA2, cv2.WINDOW_NORMAL)
@@ -404,164 +727,19 @@ def main():
                 t0 = time.monotonic()
                 dt = min(t0 - t_ant, 0.1)
                 t_ant = t0
-                if fusion.error:
-                    print("Error en el seguimiento:", fusion.error)
+                if tele.fusion.error:
+                    print("Error en el seguimiento:", tele.fusion.error)
+                    break
+                if args.reproducir and all(h.terminado() for h in hilos):
+                    print("[reproduccion] fin de la sesion")
                     break
 
-                if calib is not None:
-                    calib.alimentar()
-                    estado["mensaje"] = f"Calibrando: quieto, brazos colgando ({calib.restante():.1f} s)"
-                    t_mensaje = t0 + 0.5
-                    if calib.terminada():
-                        estado["mensaje"] = aplicar_calibracion(calib, fusion, estado)
-                        giros.clear()
-                        t_mensaje = t0 + 6.0
-                        calib = None
+                t_s = time.perf_counter()
+                snap, marcadores = tele.paso(t0, dt)
+                perfil["teleop"] = perfil.get("teleop", 0.0) + time.perf_counter() - t_s
 
                 t_s = time.perf_counter()
-                snap = fusion.ultimo()
-                perfil["fusion"] = perfil.get("fusion", 0.0) + time.perf_counter() - t_s
-                if fusion.R_cam is not R_cam:   # calibracion nueva (o inclinacion de la IMU):
-                    R_cam = fusion.R_cam        # el giro neutro de las munecas se vuelve a tomar
-                    giros.clear()
-                fresco = snap is not None and t0 - snap["t"] < CADUCIDAD
-                brazos = snap["brazos"] if fresco else {}
-                aperturas = snap["aperturas"] if fresco else {}
-                # Sin brazos un rato: se explica en la consola, camara a camara, por que
-                if brazos:
-                    t_sin_brazos = None
-                elif t_sin_brazos is None:
-                    t_sin_brazos = t0
-                elif t0 - t_sin_brazos > 2.0 and t0 - t_diag > 2.0:
-                    t_diag = t0
-                    print(f"[diagnostico] sin brazos desde hace {t0 - t_sin_brazos:.0f} s"
-                          f"{' (sin datos frescos)' if not fresco else ''}:\n{fusion.diagnostico()}")
-
-                # Diagnostico: por que se queda quieto cada brazo (se muestra en rojo)
-                estado["congelado"] = {}
-                if not estado["pausado"]:
-                    for lado_r in ("L", "R"):
-                        lado_h = OTRO_LADO[lado_r] if estado["espejo"] else lado_r
-                        err = estado["errores"].get(lado_r)
-                        if not fresco:
-                            motivo = "sin datos nuevos de la camara"
-                        elif lado_h not in brazos:
-                            motivo = f"no se ve tu brazo {'IZQ' if lado_h == 'L' else 'DER'}"
-                        elif err is not None and err[1] > UMBRAL_CONGELADO:
-                            t_lejos[lado_r] = t_lejos.get(lado_r, 0.0) + dt
-                            if t_lejos[lado_r] < 0.5:      # en un movimiento rapido es normal un momento
-                                continue
-                            motivo = f"no llega al objetivo (error muneca {err[1] * 100:.0f} cm)"
-                        else:
-                            t_lejos[lado_r] = 0.0
-                            continue
-                        estado["congelado"][lado_r] = motivo
-                if estado["congelado"] != congelado_ant:
-                    for lado_r, motivo in estado["congelado"].items():
-                        print(f"[{time.strftime('%H:%M:%S')}] robot {lado_r} quieto: {motivo}")
-                    congelado_ant = dict(estado["congelado"])
-
-                marcadores = []
-                t_s = time.perf_counter()
-                if not estado["pausado"]:
-                    # El objetivo se recalcula en CADA ciclo con la ultima medida (aunque la
-                    # camara no haya dado foto nueva) y el muelle amortiguado lo sigue: movimiento
-                    # continuo a 60 Hz en lugar de un salto por cada foto de la camara.
-                    for lado_h, datos in brazos.items():
-                        lado_r = OTRO_LADO[lado_h] if estado["espejo"] else lado_h
-                        codo, muneca = objetivos(robot, lado_r, datos, R_cam, estado["espejo"])
-                        w = peso_codo(datos)
-                        if lado_r not in suaves:
-                            suaves[lado_r] = dict(
-                                f_codo=ObjetivoSuave(OMEGA_OBJETIVO, ZONA_MUERTA_OBJ),
-                                f_muneca=ObjetivoSuave(OMEGA_OBJETIVO, ZONA_MUERTA_OBJ),
-                                f_w=ObjetivoSuave(OMEGA_OBJETIVO))
-                        s = suaves[lado_r]
-                        s["codo"] = s["f_codo"].actualizar(codo, dt)
-                        s["muneca"] = s["f_muneca"].actualizar(muneca, dt)
-                        s["w"] = float(s["f_w"].actualizar(w, dt))
-                    # un brazo que deja de verse mantiene su ultimo objetivo, pero el muelle
-                    # termina de frenar con suavidad en lugar de cortarse en seco
-                    for lado_r, s in suaves.items():
-                        if lado_r not in {OTRO_LADO[l] if estado["espejo"] else l for l in brazos}:
-                            s["codo"] = s["f_codo"].actualizar(s["f_codo"].ancla, dt)
-                            s["muneca"] = s["f_muneca"].actualizar(s["f_muneca"].ancla, dt)
-                    # las pinzas siguen a las manos; si una mano deja de verse,
-                    # la pinza se queda como estaba
-                    foto_nueva = fresco and snap["n"] != n_mano   # el retargeting, 1 vez por foto
-                    if foto_nueva:
-                        n_mano = snap["n"]
-                    for lado_h, mano in aperturas.items():
-                        lado_r = OTRO_LADO[lado_h] if estado["espejo"] else lado_h
-                        brazo = robot.brazos[lado_r]
-                        if brazo.mano is not None:              # OrcaHand
-                            if foto_nueva:
-                                if mano.get("mundo") is not None:   # dedo a dedo
-                                    brazo.mano.nuevo_objetivo(mano["mundo"], espejar=(lado_h == "L"))
-                                else:                               # solo abrir / cerrar
-                                    brazo.mano.objetivo_por_apertura(mano["apertura"])
-                        else:                                   # pinza original
-                            minimo = escena.apertura_minima(lado_r) if escena else 0.0
-                            brazo.mover_pinza(max(mano["apertura"], minimo), dt)
-                        estado["pinzas"][lado_r] = mano["apertura"]
-                        if not girar:
-                            continue
-                        if mano.get("tam_px", 1e9) < MIN_PX_GIRO:
-                            continue          # mano demasiado pequena: no se toca el giro
-                        A = marco_mano(robot, mano, R_cam, estado["espejo"])
-                        g = giros.get(lado_r)
-                        if g is None:   # al ver la mano por primera vez no hay salto:
-                            # esa postura de la mano es la neutra y la pinza no se mueve
-                            g = {"A0": A, "q0": brazo.giro(), "obj": brazo.giro(),
-                                 "cam": mano.get("cam"), "A_ult": A}
-                            giros[lado_r] = g
-                        elif mano.get("cam") != g["cam"]:
-                            # otra camara da ahora esta mano: su orientacion difiere de la
-                            # anterior en el error de calibracion. Se reancla la referencia
-                            # para que A @ A0^T (y el giro de la pinza) siga igual.
-                            g["A0"] = g["A0"] @ g["A_ult"].T @ A
-                            g["cam"] = mano.get("cam")
-                        g["A_ult"] = A
-                        # solo el giro de la mano alrededor del antebrazo; las
-                        # inclinaciones (doblar la muneca) se descartan
-                        theta = angulo_giro(A @ g["A0"].T, brazo.eje_giro())
-                        th_ant = g.get("theta")
-                        if th_ant is not None:
-                            # continuidad: sin saltos de +180 a -180, y un salto enorme entre
-                            # dos fotos se descarta (salvo que se repita: entonces es real)
-                            theta = th_ant + (theta - th_ant + np.pi) % (2 * np.pi) - np.pi
-                            if foto_nueva:
-                                if abs(theta - th_ant) > SALTO_GIRO and g.get("saltos", 0) < 2:
-                                    g["saltos"] = g.get("saltos", 0) + 1
-                                    theta = th_ant
-                                else:
-                                    g["saltos"] = 0
-                            else:
-                                theta = th_ant
-                        g["theta"] = theta
-                        g["obj"], g["v"] = suavizar(g["obj"], g.get("v", 0.0), g["q0"] + theta,
-                                                    OMEGA_GIRO, dt)
-                    # las OrcaHand se mueven en cada ciclo hacia su ultimo objetivo; con el
-                    # tubo cogido los dedos no cierran mas alla de su grosor
-                    for lado_r, orca in robot.manos.items():
-                        sujeta = escena.activa and escena.sujeta == lado_r
-                        orca.mover(dt, mano_orca.TOPE_TUBO if sujeta else None)
-                    # los brazos que dejan de verse mantienen su ultimo objetivo
-                    for lado_r, s in suaves.items():
-                        brazo = robot.brazos[lado_r]
-                        estado["errores"][lado_r] = brazo.seguir(s["codo"], s["muneca"], dt, s["w"])
-                        brazo.mover_muneca(giros[lado_r]["obj"] if lado_r in giros else None, dt)
-                        marcadores += [(s["codo"], COLOR_CODO), (s["muneca"], COLOR_MUNECA)]
-
-                perfil["robot+manos"] = perfil.get("robot+manos", 0.0) + time.perf_counter() - t_s
-                t_s = time.perf_counter()
-                robot.actualizar()
-                if escena is not None:          # la pieza sigue a la pinza, encaja o cae
-                    escena.actualizar(robot, estado["pinzas"], dt)
-                    robot.actualizar()
-                perfil["mujoco fisica"] = perfil.get("mujoco fisica", 0.0) + time.perf_counter() - t_s
-                t_s = time.perf_counter()
-                if t0 - t_sync >= 1.0 / HZ_VISOR:     # el visor no necesita refrescarse a 60 Hz
+                if t0 - t_sync >= 1.0 / HZ_VISOR:
                     t_sync = t0
                     with v.lock():
                         dibujar_marcadores(v.user_scn, marcadores)
@@ -569,14 +747,7 @@ def main():
                 perfil["mujoco visor"] = perfil.get("mujoco visor", 0.0) + time.perf_counter() - t_s
                 t_s = time.perf_counter()
 
-                estado["giros"] = {l: b.giro() for l, b in robot.brazos.items()}
-                estado["fps_control"] = 0.95 * estado["fps_control"] + 0.05 / max(dt, 1e-3)
-                if t0 > t_mensaje:
-                    estado["mensaje"] = ""
-                # Dos ventanas, cada una con su ritmo. Si las dos toca dibujarlas en este ciclo se
-                # dibuja SOLO la que lleva mas retraso (asi el ciclo no se alarga y ninguna se
-                # queda sin refrescar: antes la camara 2 era un "elif" de la principal y, con el
-                # bucle mas lento que la camara, nunca llegaba a dibujarse -> ventana negra).
+                # Dos ventanas, cada una con su ritmo (si las dos tocan, la mas atrasada)
                 crudo0 = hilos[0].ultimo_crudo()
                 n_vista = -1 if crudo0 is None else crudo0["n"]
                 crudo1 = hilos[1].ultimo_crudo() if len(hilos) > 1 else None
@@ -589,11 +760,10 @@ def main():
                 if toca1:
                     n_mostrado = n_vista
                     t_ventana = t0
-                    estado["fps_seg"] = fusion.fps
+                    estado["fps_seg"] = tele.fusion.fps
                     estado["fps_cam"] = hilos[0].fps_camara
                     estado["escena"] = escena.texto() if escena else ""
                     fu_v = snap.get("fusion")
-                    # imagen en bruto (30 fps) solo si el resultado mostrado es de la camara A
                     base_es_a = (not fu_v) or fu_v["activas"][:1] in ([], ["A"])
                     vista = vista_fluida(hilos[0], snap) if base_es_a else snap
                     cv2.imshow(VENTANA, componer_vista(vista, estado))
@@ -603,14 +773,13 @@ def main():
                     snap_b = hilos[1].ultimo()
                     if snap_b is not None:
                         snap_b = vista_fluida(hilos[1], snap_b)
-                    else:        # MediaPipe aun no ha dado nada: al menos se ve la imagen
+                    else:
                         snap_b = dict(bgr=crudo1["bgr"], depth=None, lm2d=None, manos=[], brazos={})
-                    if crudo1["bgr"].max() == 0 and t0 - t_aviso_negra > 5.0:
+                    if crudo1["bgr"].max() == 0 and not args.reproducir and t0 - t_aviso_negra > 5.0:
                         t_aviso_negra = t0
-                        print("[camara B] llegan fotogramas completamente NEGROS (la camara entrega "
-                              "imagen vacia): revisa el cable USB / que no la use otro programa")
-                    cv2.imshow(VENTANA2, componer_vista_secundaria(snap_b, hilos[1].fps_camara,
-                                                                    hilos[1].fps))
+                        print("[camara B] llegan fotogramas completamente NEGROS: revisa el cable USB / "
+                              "que no la use otro programa")
+                    cv2.imshow(VENTANA2, componer_vista_secundaria(snap_b, hilos[1].fps_camara, hilos[1].fps))
 
                 tecla = cv2.waitKey(1) & 0xFF
                 perfil["ventanas"] = perfil.get("ventanas", 0.0) + time.perf_counter() - t_s
@@ -623,36 +792,11 @@ def main():
                               + " | ".join(f"{k} {v * 1000 / n_c:.1f}" for k, v in perfil.items())
                               + f" | camaras {' / '.join(f'{h.fps:.0f}' for h in hilos)} fps")
                     perfil, t_perfil = {}, t0
-                if tecla in (ord("q"), 27):
+                if tecla != 255 and tele.tecla(tecla, t0, visor=v):
                     break
-                elif tecla == ord("p"):
-                    estado["pausado"] = not estado["pausado"]
-                elif tecla == ord("m"):
-                    estado["espejo"] = not estado["espejo"]
-                    suaves.clear()
-                    giros.clear()
-                    estado["errores"].clear()
-                    estado["pinzas"].clear()
-                elif tecla == ord("o"):
-                    giros.clear()
-                    estado["mensaje"] = "Giro de munecas recentrado"
-                    t_mensaje = t0 + 2.0
-                elif tecla == ord("1"):
-                    estado["mensaje"] = ("Escenario de tuberias reiniciado" if escena.activa
-                                         else "Escenario de tuberias")
-                    escena.activar(v)
-                    t_mensaje = t0 + 2.0
-                elif tecla == ord("v"):
+                if tecla == ord("v"):
                     desde_detras = not desde_detras
                     colocar_camara(v, robot, desde_detras)
-                elif tecla == ord("r"):
-                    robot.reposo()
-                    suaves.clear()
-                    giros.clear()
-                    estado["errores"].clear()
-                    estado["pinzas"].clear()
-                elif tecla == ord("c"):
-                    calib = CalibracionCamaras(hilos, fusion=fusion)
                 if cv2.getWindowProperty(VENTANA, cv2.WND_PROP_VISIBLE) < 1 and n_mostrado >= 0:
                     break
 
@@ -660,6 +804,7 @@ def main():
                 if espera > 0:
                     time.sleep(espera)
     finally:
+        tele.cerrar()
         for hilo_k in hilos:
             hilo_k.parar()
         for cam_k in camaras:

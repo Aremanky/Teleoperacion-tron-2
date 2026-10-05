@@ -5,7 +5,7 @@ Utilidades de retargeting biomecánico (flexión, abertura, distancia, flexión 
 """
 import numpy as np
 
-from config import *
+from config_mano import LM_ANULAR_MCP, LM_CORAZON_MCP, LM_INDICE_MCP, LM_MENIQUE_MCP, LM_MUNECA
 
 
 # ══════════════════════════════════════════════════════════════════════════════
