@@ -30,6 +30,7 @@ import numpy as np
 from config import LIMITES_CTRL, N_ACT, OFFSET_MANO, POSICION_STANDBY, TALADRO_DEMO_MANO_AGARRE
 from retargeting import retarget_a_ctrl
 from suavizador import SuavizadorND
+from suavizado import suavizar
 
 # ============================== AJUSTES ======================================
 ORCA_MJCF = "orcahand_description-main/v2/models/mjcf"
@@ -57,6 +58,8 @@ ORIENTACION_MANO = dict(dedos="antebrazo",
                         palma=[-1.0, 0.0, 0.0])   # palma hacia atras
 
 VEL_DEDOS = 8.0          # rad/s maximos de cada junta (quita tirones entre fotogramas)
+OMEGA_DEDOS = 16.0       # rad/s del muelle amortiguado de los dedos (mas alto = mas rapido, menos suave).
+                         # El objetivo llega a ~12 fps; antes cada junta "saltaba" al escalon en 1-2 ciclos.
 # Si en la mano IZQUIERDA alguna junta se mueve al reves (suele pasar con las abducciones),
 # pon -1.0 en su indice (mismo orden que LIMITES_CTRL de config.py)
 SIGNO_IZQ = np.ones(N_ACT)
@@ -502,6 +505,7 @@ class ManoOrca:
         self.signo = SIGNO_IZQ if lado == "L" else np.ones(N_ACT)
         self.q = MANO_ABIERTA.copy()
         self.objetivo = MANO_ABIERTA.copy()
+        self._vq = np.zeros(N_ACT)     # velocidad de cada junta (filtro amortiguado)
 
         # El retargeting escribe en datos.ctrl[OFFSET_MANO:...]: le damos unos "datos"
         # de mentira para no tocar retargeting.py. ncon=0 porque aqui no hay contactos.
@@ -581,13 +585,19 @@ class ManoOrca:
         objetivo = np.clip(self.objetivo, self.lo, self.hi)
         if tope is not None:
             objetivo[DEDOS_FLEXION] = np.minimum(objetivo[DEDOS_FLEXION], tope)
+        # muelle criticamente amortiguado hacia el objetivo (posicion y velocidad continuas),
+        # con el limite de velocidad de siempre por si el objetivo salta mucho
+        q, v = suavizar(self.q, self._vq, objetivo, OMEGA_DEDOS, dt)
+        v = np.clip(v, -VEL_DEDOS, VEL_DEDOS)
         paso = VEL_DEDOS * dt
-        self.q += np.clip(objetivo - self.q, -paso, paso)
+        self.q = self.q + np.clip(q - self.q, -paso, paso)
+        self._vq = v
         self._escribir()
 
     def reposo(self):
         self.q = MANO_ABIERTA.copy()
         self.objetivo = MANO_ABIERTA.copy()
+        self._vq = np.zeros(N_ACT)
         self._falso.ctrl[OFFSET_MANO:] = self.q
         self.suav.reset()
         self._escribir()

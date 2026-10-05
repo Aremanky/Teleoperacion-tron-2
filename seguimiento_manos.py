@@ -15,6 +15,7 @@ mano. El pulgar se ignora porque es el mas ruidoso.
 import os
 import time
 import urllib.request
+from collections import deque
 
 import cv2
 import mediapipe as mp
@@ -32,6 +33,15 @@ DEDOS = ((5, 8), (9, 12), (13, 16), (17, 20))   # (nudillo, punta)
 # asi que se pueden afinar mirando la pantalla con la mano abierta y cerrada.
 RAZON_CERRADA = 0.40
 RAZON_ABIERTA = 0.85
+# Rango ADAPTATIVO: con la mano lejos (pocos pixeles) un puno cerrado no baja de ~0.55,
+# asi que con el umbral fijo de 0.40 nunca llegaba a "cerrado". Se toma el rango de lo
+# que se ha visto de cada mano en el ultimo minuto (percentiles 5 y 95), con limites para
+# que una mano que no se ha cerrado nunca no se lea como cerrada.
+HISTORIA_RAZON = 1800           # muestras (~1 min a 30 fps)
+MIN_MUESTRAS_ADAPT = 60
+CERRADA_MAX = 0.62              # el umbral de "cerrado" no sube de aqui
+SPAN_MIN = 0.25                 # entre cerrado y abierto, como minimo
+ABIERTA_MIN = 0.75
 
 ZONA_MUERTA = 0.12              # pega la apertura a 0 o a 1 cerca de los extremos
 DIST_MAX_MUNECA = 0.20          # fraccion del ancho de imagen para emparejar mano y brazo
@@ -81,6 +91,7 @@ class SeguidorManos:
         )
         self.detector = mp.tasks.vision.HandLandmarker.create_from_options(opciones)
         self.filtros = {"L": FiltroApertura(), "R": FiltroApertura()}
+        self.historia = {"L": deque(maxlen=HISTORIA_RAZON), "R": deque(maxlen=HISTORIA_RAZON)}
         self.t_ms = 0
         self.manos = []   # [{lado, apertura, bruto, puntos_px}] del ultimo frame, para dibujar
 
@@ -117,9 +128,19 @@ class SeguidorManos:
         a = a / na
         return np.column_stack([f, a, np.cross(f, a)])
 
+    def rango(self, lado):
+        """(razon de puno cerrado, razon de mano abierta) para esa mano."""
+        h = self.historia[lado]
+        if len(h) < MIN_MUESTRAS_ADAPT:
+            return RAZON_CERRADA, RAZON_ABIERTA
+        p5, p95 = np.percentile(h, (5, 95))
+        cerrada = float(np.clip(p5, RAZON_CERRADA, CERRADA_MAX))
+        abierta = float(max(p95, cerrada + SPAN_MIN, ABIERTA_MIN))
+        return cerrada, abierta
+
     @staticmethod
-    def a_apertura(razon):
-        a = (razon - RAZON_CERRADA) / (RAZON_ABIERTA - RAZON_CERRADA)
+    def a_apertura(razon, cerrada=RAZON_CERRADA, abierta=RAZON_ABIERTA):
+        a = (razon - cerrada) / (abierta - cerrada)
         a = float(np.clip(a, 0.0, 1.0))
         if a < ZONA_MUERTA:          # asegura puno del todo cerrado
             return 0.0
@@ -170,7 +191,8 @@ class SeguidorManos:
         for dist, lado, razon, px, R, mundo in sorted(candidatos, key=lambda c: c[0]):
             if lado in datos:
                 continue
-            apertura = self.filtros[lado](self.a_apertura(razon), t)
+            self.historia[lado].append(razon)
+            apertura = self.filtros[lado](self.a_apertura(razon, *self.rango(lado)), t)
             datos[lado] = {"apertura": apertura, "marco": R, "mundo": mundo}
             self.manos.append({"lado": lado, "apertura": apertura,
                                "bruto": razon, "puntos_px": px})

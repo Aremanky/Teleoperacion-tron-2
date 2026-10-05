@@ -15,8 +15,17 @@ Fuente de los puntos 3D (se muestra en la ventana):
   "... codo tapado": el codo no se ve (brazo apuntando a la camara). Se toma el
                  brazo como RECTO, de hombro a muneca, en vez de perderlo.
 
+La linea de hombros (para calibrar) sale tambien de la OAK-D cuando hay
+profundidad: la 'z' que estima MediaPipe con una sola imagen es su peor dato, y
+desde una camara lateral la linea de hombros apunta justo a lo largo de esa z.
+
+Para la fusion de varias camaras por puntos 3D (fusion.py) se publican ademas los
+PUNTOS de hombros, codos, munecas y caderas: pixel, visibilidad y profundidad
+(de la OAK-D si es coherente; si no, la prevista con MediaPipe a partir del hombro).
+
 HiloSeguimiento ejecuta camara + MediaPipe en segundo plano para que el bucle
-del robot vaya a su ritmo aunque el seguimiento sea mas lento.
+del robot vaya a su ritmo aunque el seguimiento sea mas lento. Cada resultado
+lleva el instante de CAPTURA del frame (t), no el de cuando acabo MediaPipe.
 """
 import os
 import threading
@@ -43,6 +52,9 @@ VIS_MIN = 0.35
 RANGO_BRAZO = (0.15, 0.50)        # m, longitudes plausibles para aceptar
 RANGO_ANTEBRAZO = (0.12, 0.45)    # la lectura de profundidad
 RANGO_HOMBRO_MUNECA = (0.15, 0.85)  # m, idem cuando el codo esta tapado
+PUNTOS_3D = (11, 12, 13, 14, 15, 16, 23, 24)   # hombros, codos, munecas, caderas
+REF_PUNTO = {13: 11, 15: 11, 14: 12, 16: 12}    # codo/muneca: su profundidad se valida con la del hombro
+RANGO_HOMBROS = (0.22, 0.55)       # m, distancia plausible entre los dos hombros
 TOL_Z = 0.20                      # m: diferencia maxima entre la profundidad de la OAK-D
                                   #    y la que predice MediaPipe para fiarse de la OAK-D
 FILTRO_MIN_CUTOFF = 0.8           # Hz: mas bajo = menos temblor en reposo
@@ -112,17 +124,20 @@ class SeguidorBrazos:
         self.t_ms = 0
         self.filtros = {lado: (FiltroOneEuro(), FiltroOneEuro()) for lado in PUNTOS}
         self.lm2d = None            # [(u, v, visibilidad)] en pixeles, para dibujar
+        self.puntos = None          # {indice: {uv, vis, z, fuente}} para la fusion 3D
         self.linea_hombros = None   # hombro izq - hombro der (unitario), para calibrar
 
-    def procesar(self, bgr, depth=None, K=None):
+    def procesar(self, bgr, depth=None, K=None, t=None):
+        """t: instante de captura del frame (para los filtros). Por defecto, ahora."""
         h, w = bgr.shape[:2]
+        t = time.monotonic() if t is None else t
         rgb = np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-        self.t_ms = max(self.t_ms + 1, int(time.monotonic() * 1000))  # estrictamente creciente
+        self.t_ms = max(self.t_ms + 1, int(t * 1000))  # estrictamente creciente
         res = self.detector.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), self.t_ms)
-        return self._extraer(res, w, h, depth, K, time.monotonic())
+        return self._extraer(res, w, h, depth, K, t)
 
     def _extraer(self, res, w, h, depth, K, t):
-        self.lm2d, self.linea_hombros = None, None
+        self.lm2d, self.linea_hombros, self.puntos = None, None, None
         brazos = {}
         if not res.pose_landmarks:
             return brazos
@@ -133,7 +148,10 @@ class SeguidorBrazos:
             return 1.0 if p.visibility is None else p.visibility
 
         self.lm2d = [(p.x * w, p.y * h, vis(p)) for p in lm]
-        if mundo is not None:
+        self.puntos = self._puntos_3d(lm, mundo, depth if self.usar_profundidad else None, K, w, h)
+        if self.usar_profundidad and depth is not None and K is not None and mundo is not None:
+            self.linea_hombros = self._linea_hombros_profundidad(lm, mundo, depth, K, w, h)
+        if self.linea_hombros is None and mundo is not None:
             self.linea_hombros = unitario(np.array([mundo[11].x - mundo[12].x,
                                                     mundo[11].y - mundo[12].y,
                                                     mundo[11].z - mundo[12].z]))
@@ -161,10 +179,67 @@ class SeguidorBrazos:
             if d_b is None or d_a is None:
                 continue
             f_b, f_a = self.filtros[lado]
+            # visibilidad del brazo (la peor de sus puntos; el codo tapado ya va en 'fuente')
+            vis_brazo = min(v_hombro, v_muneca) if codo_tapado else min(v_hombro, v_codo, v_muneca)
             brazos[lado] = {"dir_brazo": unitario(f_b(d_b, t)),
                             "dir_antebrazo": unitario(f_a(d_a, t)),
-                            "fuente": fuente}
+                            "fuente": fuente, "vis": float(vis_brazo)}
         return brazos
+
+    @staticmethod
+    def _puntos_3d(lm, mundo, depth, K, w, h):
+        """Para cada punto de PUNTOS_3D: pixel (sin voltear), visibilidad y profundidad z (m,
+        a lo largo del eje optico, de la piel que ve la camara) con su fuente:
+          "oak"  medida por la OAK-D (en codo y muneca, solo si cuadra con MediaPipe)
+          "pred" hombro + diferencia de profundidad de MediaPipe (cuando la OAK-D no vale)
+          None   sin profundidad (sin OAK-D o sin dato en el hombro): solo el rayo del pixel"""
+        out = {}
+        for i in PUNTOS_3D:
+            p = lm[i]
+            out[i] = {"uv": (p.x * w, p.y * h), "vis": 1.0 if p.visibility is None else p.visibility,
+                      "z": None, "fuente": None}
+        if depth is None or K is None:
+            return out
+        z_oak = {i: (profundidad_en(depth, *out[i]["uv"]) if out[i]["vis"] >= VIS_MIN else None)
+                 for i in PUNTOS_3D}
+        for i in PUNTOS_3D:
+            ref = REF_PUNTO.get(i)
+            if ref is None:                          # hombros y caderas: la OAK-D directamente
+                if z_oak[i] is not None:
+                    out[i]["z"], out[i]["fuente"] = z_oak[i], "oak"
+                continue
+            z_pred = None
+            if z_oak[ref] is not None and mundo is not None:
+                z_pred = z_oak[ref] + (mundo[i].z - mundo[ref].z)
+            if z_oak[i] is not None and (z_pred is None or abs(z_oak[i] - z_pred) < TOL_Z):
+                out[i]["z"], out[i]["fuente"] = z_oak[i], "oak"
+            elif z_pred is not None:
+                out[i]["z"], out[i]["fuente"] = z_pred, "pred"
+        return out
+
+    @staticmethod
+    def _linea_hombros_profundidad(lm, mundo, depth, K, w, h):
+        """Hombro izquierdo - hombro derecho (unitario) con la profundidad de la OAK-D.
+        El hombro mas visible da la referencia; el otro usa su propia lectura solo si
+        cuadra con la que predice MediaPipe (en una vista lateral el hombro lejano
+        queda tapado y su pixel 'cae' sobre el torso). None si no es fiable."""
+        fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+        vis = [1.0 if lm[i].visibility is None else lm[i].visibility for i in (11, 12)]
+        if min(vis) < VIS_MIN:
+            return None
+        cerca, lejos = (11, 12) if vis[0] >= vis[1] else (12, 11)
+        uv = {i: (lm[i].x * w, lm[i].y * h) for i in (11, 12)}
+        z = {cerca: profundidad_en(depth, *uv[cerca])}
+        if z[cerca] is None:
+            return None
+        z_pred = z[cerca] + (mundo[lejos].z - mundo[cerca].z)
+        z_oak = profundidad_en(depth, *uv[lejos])
+        z[lejos] = z_oak if (z_oak is not None and abs(z_oak - z_pred) < TOL_Z) else z_pred
+        p = {i: np.array([(uv[i][0] - cx) * z[i] / fx, (uv[i][1] - cy) * z[i] / fy, z[i]]) for i in (11, 12)}
+        d = p[11] - p[12]
+        if not RANGO_HOMBROS[0] < np.linalg.norm(d) < RANGO_HOMBROS[1]:
+            return None
+        return unitario(d)
 
     def _puntos_fusion(self, lm, mundo, idx, depth, K, w, h, codo_tapado=False):
         """Pixel (u, v) de MediaPipe + profundidad. El hombro (sobre el torso) da la
@@ -201,16 +276,30 @@ class SeguidorBrazos:
 
 class HiloSeguimiento(threading.Thread):
     """Lee la camara y ejecuta MediaPipe (cuerpo y, si se pasa, manos) en segundo
-    plano. El bucle principal pide el ultimo resultado con ultimo() sin esperar."""
+    plano. El bucle principal pide el ultimo resultado con ultimo() sin esperar.
+
+    DOS hilos: uno solo CAPTURA (a los fps de la camara, 30) y deja siempre el ultimo
+    fotograma en bruto; el otro ejecuta MediaPipe sobre el fotograma mas reciente (a lo
+    que de el PC). Asi la imagen de la ventana (ultimo_crudo()) va fluida a los fps de
+    la camara aunque MediaPipe vaya a 10-15 fps, y MediaPipe nunca procesa un
+    fotograma atrasado."""
 
     def __init__(self, camara, seguidor, seguidor_manos=None):
         super().__init__(daemon=True)
         self.camara, self.seguidor, self.manos = camara, seguidor, seguidor_manos
         self._lock = threading.Lock()
+        self._cond = threading.Condition()
         self._ultimo = None
-        self.activo, self.error, self.fps = True, None, 0.0
+        self._crudo = None          # (n, bgr, depth, K, t_captura)
+        self.activo, self.error, self.fps, self.fps_camara = True, None, 0.0, 0.0
+        self._captura = threading.Thread(target=self._bucle_captura, daemon=True)
 
-    def run(self):
+    def start(self):
+        self._captura.start()
+        super().start()
+
+    # ---------------------------------------------------------- captura
+    def _bucle_captura(self):
         t_ant, n = time.monotonic(), 0
         try:
             while self.activo:
@@ -218,7 +307,37 @@ class HiloSeguimiento(threading.Thread):
                 if bgr is None:
                     self.error = "no llegan imagenes de la camara"
                     return
-                brazos = self.seguidor.procesar(bgr, depth, self.camara.K)
+                t_cap = getattr(self.camara, "t_captura", None) or time.monotonic()
+                ahora = time.monotonic()
+                self.fps_camara = 0.9 * self.fps_camara + 0.1 / max(ahora - t_ant, 1e-3)
+                t_ant, n = ahora, n + 1
+                with self._cond:
+                    self._crudo = (n, bgr, depth, self.camara.K, t_cap)
+                    self._cond.notify_all()
+        except Exception as e:  # se informa desde el hilo principal
+            self.error = repr(e)
+
+    def ultimo_crudo(self):
+        """Ultimo fotograma de la camara SIN procesar: dict(n, bgr, depth, t) o None."""
+        c = self._crudo
+        return None if c is None else dict(n=c[0], bgr=c[1], depth=c[2], t=c[4])
+
+    # ---------------------------------------------------------- MediaPipe
+    def run(self):
+        t_ant, n, n_visto = time.monotonic(), 0, -1
+        try:
+            while self.activo:
+                with self._cond:
+                    self._cond.wait_for(lambda: (not self.activo) or self.error is not None
+                                        or (self._crudo is not None and self._crudo[0] != n_visto),
+                                        timeout=0.5)
+                    crudo = self._crudo
+                if self.error:
+                    return
+                if crudo is None or crudo[0] == n_visto:
+                    continue
+                n_visto, bgr, depth, K, t_cap = crudo
+                brazos = self.seguidor.procesar(bgr, depth, K, t_cap)
                 aperturas, dibujo_manos = {}, []
                 if self.manos is not None:
                     aperturas = self.manos.procesar(bgr, self.seguidor.lm2d)
@@ -227,7 +346,8 @@ class HiloSeguimiento(threading.Thread):
                 self.fps = 0.9 * self.fps + 0.1 / max(ahora - t_ant, 1e-3)
                 t_ant, n = ahora, n + 1
                 with self._lock:
-                    self._ultimo = dict(n=n, t=ahora, bgr=bgr, depth=depth, brazos=brazos,
+                    self._ultimo = dict(n=n, t=t_cap, t_proc=ahora, bgr=bgr, depth=depth, brazos=brazos,
+                                        puntos=self.seguidor.puntos, K=K,
                                         aperturas=aperturas, manos=dibujo_manos,
                                         lm2d=self.seguidor.lm2d,
                                         linea_hombros=self.seguidor.linea_hombros)
@@ -240,7 +360,10 @@ class HiloSeguimiento(threading.Thread):
 
     def parar(self):
         self.activo = False
+        with self._cond:
+            self._cond.notify_all()
         self.join(timeout=2.0)
+        self._captura.join(timeout=2.0)
 
 
 def dibujar_esqueleto(img, lm2d):

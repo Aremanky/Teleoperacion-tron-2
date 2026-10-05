@@ -1,22 +1,1256 @@
 .
 ├── arranque.sh
+├── biomecanica.py
 ├── camaras.py
+├── config.py
 ├── decoracion
 │   ├── I+D+I_DENOMIN_GRUPO_RGB.png
 │   └── Logo_Elecnor_AZUL.png
 ├── escenario_tuberias.py
+├── fusion.py
+├── hand_landmarker.task
+├── mano_orca.py
+├── MUJOCO_LOG.TXT
+├── orca_core-main
+│   ├── CLAUDE.md
+│   ├── demo
+│   │   └── kapangi_replay_sequence_20250504_002233.yaml
+│   ├── docs
+│   │   ├── auto_docs_instructions.md
+│   │   ├── css
+│   │   │   └── overrides.css
+│   │   ├── img
+│   │   │   └── logo-light-256.png
+│   │   ├── index.md
+│   │   ├── pages
+│   │   │   ├── getting-started-docs
+│   │   │   │   ├── initial-tensioning-and-calibration.md
+│   │   │   │   ├── quickstart-with-core-package.md
+│   │   │   │   ├── setting-up-config.md
+│   │   │   │   └── setting-up-dynamixels.md
+│   │   │   └── orca-core-docs
+│   │   │       ├── latency-optimization.md
+│   │   │       ├── motor-client-api.md
+│   │   │       ├── orca-core-scripts.md
+│   │   │       ├── orca-core-structure.md
+│   │   │       └── orcahand-api.md
+│   │   └── requirements.txt
+│   ├── LICENSE
+│   ├── mkdocs.yml
+│   ├── orca_core
+│   │   ├── api
+│   │   │   ├── api.py
+│   │   │   └── __init__.py
+│   │   ├── base_hand.py
+│   │   ├── calibration.py
+│   │   ├── constants.py
+│   │   ├── core.py
+│   │   ├── hand_config.py
+│   │   ├── hardware
+│   │   │   ├── dynamixel_client.py
+│   │   │   ├── feetech
+│   │   │   │   ├── group_sync_read.py
+│   │   │   │   ├── group_sync_write.py
+│   │   │   │   ├── hls.py
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── port_handler.py
+│   │   │   │   ├── protocol_packet_handler.py
+│   │   │   │   ├── scscl.py
+│   │   │   │   ├── scservo_def.py
+│   │   │   │   └── sms_sts.py
+│   │   │   ├── feetech_client.py
+│   │   │   ├── __init__.py
+│   │   │   ├── mock_dynamixel_client.py
+│   │   │   ├── motor_client.py
+│   │   │   └── __pycache__
+│   │   │       ├── dynamixel_client.cpython-312.pyc
+│   │   │       ├── __init__.cpython-312.pyc
+│   │   │       └── motor_client.cpython-312.pyc
+│   │   ├── hardware_hand.py
+│   │   ├── __init__.py
+│   │   ├── joint_position.py
+│   │   ├── models
+│   │   │   ├── v1
+│   │   │   │   ├── orcahand_left
+│   │   │   │   │   └── config.yaml
+│   │   │   │   └── orcahand_right
+│   │   │   │       ├── config.yaml
+│   │   │   │       ├── hand_scheme.yaml
+│   │   │   │       └── retargeter.yaml
+│   │   │   └── v2
+│   │   │       ├── orcahand_left
+│   │   │       │   └── config.yaml
+│   │   │       ├── orcahand_right
+│   │   │       │   ├── calibration.yaml
+│   │   │       │   ├── config.yaml
+│   │   │       │   ├── hand_scheme.yaml
+│   │   │       │   └── retargeter.yaml
+│   │   │       ├── orcahand_touch_left
+│   │   │       │   └── config.yaml
+│   │   │       └── orcahand_touch_right
+│   │   │           └── config.yaml
+│   │   ├── __pycache__
+│   │   │   ├── base_hand.cpython-312.pyc
+│   │   │   ├── calibration.cpython-312.pyc
+│   │   │   ├── constants.cpython-312.pyc
+│   │   │   ├── hand_config.cpython-312.pyc
+│   │   │   ├── hardware_hand.cpython-312.pyc
+│   │   │   ├── __init__.cpython-312.pyc
+│   │   │   ├── joint_position.cpython-312.pyc
+│   │   │   └── version.cpython-312.pyc
+│   │   ├── utils
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── __init__.cpython-312.pyc
+│   │   │   │   └── utils.cpython-312.pyc
+│   │   │   └── utils.py
+│   │   └── version.py
+│   ├── pyproject.toml
+│   ├── README.md
+│   ├── scripts
+│   │   ├── calibrate.py
+│   │   ├── check_motor.py
+│   │   ├── common.py
+│   │   ├── configure_motor_chain.py
+│   │   ├── debug_overload.py
+│   │   ├── jitter.py
+│   │   ├── main_demo_abduction.py
+│   │   ├── main_demo.py
+│   │   ├── neutral.py
+│   │   ├── overload_demo.py
+│   │   ├── record_angles.py
+│   │   ├── record_continuous.py
+│   │   ├── replay_angles.py
+│   │   ├── replay_continuous.py
+│   │   ├── setup.py
+│   │   ├── slider_joint.py
+│   │   ├── slider_motor.py
+│   │   ├── stress_test.py
+│   │   ├── tension.py
+│   │   ├── test_motor_latency.py
+│   │   ├── test_overload.py
+│   │   └── zero.py
+│   └── tests
+│       ├── conftest.py
+│       ├── __init__.py
+│       ├── reference
+│       │   └── calibration_expected.yaml
+│       ├── test_base_hand_contract.py
+│       ├── test_calibration.py
+│       ├── test_calibration_reference.py
+│       ├── test_core.py
+│       ├── test_hardware_hand.py
+│       ├── test_jitter.py
+│       ├── test_model_dispatch.py
+│       ├── test_tension.py
+│       └── test_yaml.py
+├── orcahand_description-main
+│   ├── assets
+│   │   ├── mjcf
+│   │   │   ├── left
+│   │   │   │   ├── collision
+│   │   │   │   │   ├── left_collision_index_ip_skin.stl
+│   │   │   │   │   ├── left_collision_index_ip.stl
+│   │   │   │   │   ├── left_collision_index_mp.stl
+│   │   │   │   │   ├── left_collision_index_pp_skin.stl
+│   │   │   │   │   ├── left_collision_index_pp.stl
+│   │   │   │   │   ├── left_collision_middle_ip_skin.stl
+│   │   │   │   │   ├── left_collision_middle_ip.stl
+│   │   │   │   │   ├── left_collision_middle_mp.stl
+│   │   │   │   │   ├── left_collision_middle_pp_skin.stl
+│   │   │   │   │   ├── left_collision_middle_pp.stl
+│   │   │   │   │   ├── left_collision_palm_skin.stl
+│   │   │   │   │   ├── left_collision_palm.stl
+│   │   │   │   │   ├── left_collision_pinky_ip_skin.stl
+│   │   │   │   │   ├── left_collision_pinky_ip.stl
+│   │   │   │   │   ├── left_collision_pinky_mp.stl
+│   │   │   │   │   ├── left_collision_pinky_pp_skin.stl
+│   │   │   │   │   ├── left_collision_pinky_pp.stl
+│   │   │   │   │   ├── left_collision_ring_ip_skin.stl
+│   │   │   │   │   ├── left_collision_ring_ip.stl
+│   │   │   │   │   ├── left_collision_ring_mp.stl
+│   │   │   │   │   ├── left_collision_ring_pp_skin.stl
+│   │   │   │   │   ├── left_collision_ring_pp.stl
+│   │   │   │   │   ├── left_collision_thumb_dp_skin.stl
+│   │   │   │   │   ├── left_collision_thumb_dp.stl
+│   │   │   │   │   ├── left_collision_thumb_ip_skin.stl
+│   │   │   │   │   ├── left_collision_thumb_ip.stl
+│   │   │   │   │   ├── left_collision_thumb_mp.stl
+│   │   │   │   │   ├── left_collision_thumb_pp.stl
+│   │   │   │   │   ├── left_collision_tower_camera.stl
+│   │   │   │   │   ├── left_collision_tower_fans.stl
+│   │   │   │   │   ├── left_collision_tower_hull.stl
+│   │   │   │   │   ├── left_collision_tower_main.stl
+│   │   │   │   │   ├── left_collision_tower_text.stl
+│   │   │   │   │   └── left_collision_tower_u2d2.stl
+│   │   │   │   ├── ForeArmStructure-Model.stl
+│   │   │   │   ├── I-AP-L.stl
+│   │   │   │   ├── I-FingerTipAssembly.stl
+│   │   │   │   ├── I-L-Assembly.stl
+│   │   │   │   ├── I-PP.stl
+│   │   │   │   ├── L-Carpals.stl
+│   │   │   │   ├── L-T-AP.stl
+│   │   │   │   ├── M-AP.stl
+│   │   │   │   ├── M-Assembly.stl
+│   │   │   │   ├── M-FingerTipAssembly.stl
+│   │   │   │   ├── M-PP.stl
+│   │   │   │   ├── P-AP.stl
+│   │   │   │   ├── P-Assembly.stl
+│   │   │   │   ├── P-FingerTipAssembly.stl
+│   │   │   │   ├── P-PP.stl
+│   │   │   │   ├── T-DP.stl
+│   │   │   │   ├── T-L-Assembly.stl
+│   │   │   │   ├── TopTower-Model.stl
+│   │   │   │   ├── T-PP.stl
+│   │   │   │   ├── T-TP-L.stl
+│   │   │   │   └── visual
+│   │   │   │       ├── left_visual_index_ip_skin.stl
+│   │   │   │       ├── left_visual_index_ip.stl
+│   │   │   │       ├── left_visual_index_mp.stl
+│   │   │   │       ├── left_visual_index_pp_skin.stl
+│   │   │   │       ├── left_visual_index_pp.stl
+│   │   │   │       ├── left_visual_middle_ip_skin.stl
+│   │   │   │       ├── left_visual_middle_ip.stl
+│   │   │   │       ├── left_visual_middle_mp.stl
+│   │   │   │       ├── left_visual_middle_pp_skin.stl
+│   │   │   │       ├── left_visual_middle_pp.stl
+│   │   │   │       ├── left_visual_palm_skin.stl
+│   │   │   │       ├── left_visual_palm.stl
+│   │   │   │       ├── left_visual_pinky_ip_skin.stl
+│   │   │   │       ├── left_visual_pinky_ip.stl
+│   │   │   │       ├── left_visual_pinky_mp.stl
+│   │   │   │       ├── left_visual_pinky_pp_skin.stl
+│   │   │   │       ├── left_visual_pinky_pp.stl
+│   │   │   │       ├── left_visual_ring_ip_skin.stl
+│   │   │   │       ├── left_visual_ring_ip.stl
+│   │   │   │       ├── left_visual_ring_mp.stl
+│   │   │   │       ├── left_visual_ring_pp_skin.stl
+│   │   │   │       ├── left_visual_ring_pp.stl
+│   │   │   │       ├── left_visual_thumb_dp_skin.stl
+│   │   │   │       ├── left_visual_thumb_dp.stl
+│   │   │   │       ├── left_visual_thumb_ip_skin.stl
+│   │   │   │       ├── left_visual_thumb_ip.stl
+│   │   │   │       ├── left_visual_thumb_mp.stl
+│   │   │   │       ├── left_visual_thumb_pp.stl
+│   │   │   │       ├── left_visual_tower_camera.stl
+│   │   │   │       ├── left_visual_tower_fans.stl
+│   │   │   │       ├── left_visual_tower_hull.stl
+│   │   │   │       ├── left_visual_tower_main.stl
+│   │   │   │       ├── left_visual_tower_text.stl
+│   │   │   │       └── left_visual_tower_u2d2.stl
+│   │   │   ├── options.xml
+│   │   │   ├── right
+│   │   │   │   ├── collision
+│   │   │   │   │   ├── right_collision_index_ip_skin.stl
+│   │   │   │   │   ├── right_collision_index_ip.stl
+│   │   │   │   │   ├── right_collision_index_mp.stl
+│   │   │   │   │   ├── right_collision_index_pp_skin.stl
+│   │   │   │   │   ├── right_collision_index_pp.stl
+│   │   │   │   │   ├── right_collision_middle_ip_skin.stl
+│   │   │   │   │   ├── right_collision_middle_ip.stl
+│   │   │   │   │   ├── right_collision_middle_mp.stl
+│   │   │   │   │   ├── right_collision_middle_pp_skin.stl
+│   │   │   │   │   ├── right_collision_middle_pp.stl
+│   │   │   │   │   ├── right_collision_palm_skin.stl
+│   │   │   │   │   ├── right_collision_palm.stl
+│   │   │   │   │   ├── right_collision_pinky_ip_skin.stl
+│   │   │   │   │   ├── right_collision_pinky_ip.stl
+│   │   │   │   │   ├── right_collision_pinky_mp.stl
+│   │   │   │   │   ├── right_collision_pinky_pp_skin.stl
+│   │   │   │   │   ├── right_collision_pinky_pp.stl
+│   │   │   │   │   ├── right_collision_ring_ip_skin.stl
+│   │   │   │   │   ├── right_collision_ring_ip.stl
+│   │   │   │   │   ├── right_collision_ring_mp.stl
+│   │   │   │   │   ├── right_collision_ring_pp_skin.stl
+│   │   │   │   │   ├── right_collision_ring_pp.stl
+│   │   │   │   │   ├── right_collision_thumb_dp_skin.stl
+│   │   │   │   │   ├── right_collision_thumb_dp.stl
+│   │   │   │   │   ├── right_collision_thumb_ip_skin.stl
+│   │   │   │   │   ├── right_collision_thumb_ip.stl
+│   │   │   │   │   ├── right_collision_thumb_mp.stl
+│   │   │   │   │   ├── right_collision_thumb_pp.stl
+│   │   │   │   │   ├── right_collision_tower_camera.stl
+│   │   │   │   │   ├── right_collision_tower_fans.stl
+│   │   │   │   │   ├── right_collision_tower_hull.stl
+│   │   │   │   │   ├── right_collision_tower_main.stl
+│   │   │   │   │   ├── right_collision_tower_text.stl
+│   │   │   │   │   └── right_collision_tower_u2d2.stl
+│   │   │   │   ├── ForeArmStructure-Model.stl
+│   │   │   │   ├── I-AP-R.stl
+│   │   │   │   ├── I-FingerTipAssembly.stl
+│   │   │   │   ├── I-PP.stl
+│   │   │   │   ├── I-R-Assembly.stl
+│   │   │   │   ├── M-AP.stl
+│   │   │   │   ├── M-Assembly.stl
+│   │   │   │   ├── M-FingerTipAssembly.stl
+│   │   │   │   ├── M-PP.stl
+│   │   │   │   ├── P-AP.stl
+│   │   │   │   ├── P-Assembly.stl
+│   │   │   │   ├── P-FingerTipAssembly.stl
+│   │   │   │   ├── P-PP.stl
+│   │   │   │   ├── R-Carpals.stl
+│   │   │   │   ├── R-T-AP.stl
+│   │   │   │   ├── T-DP.stl
+│   │   │   │   ├── TopTower-Model.stl
+│   │   │   │   ├── T-PP.stl
+│   │   │   │   ├── T-R-Assembly.stl
+│   │   │   │   ├── T-TP-R.stl
+│   │   │   │   └── visual
+│   │   │   │       ├── right_visual_index_ip_skin.stl
+│   │   │   │       ├── right_visual_index_ip.stl
+│   │   │   │       ├── right_visual_index_mp.stl
+│   │   │   │       ├── right_visual_index_pp_skin.stl
+│   │   │   │       ├── right_visual_index_pp.stl
+│   │   │   │       ├── right_visual_middle_ip_skin.stl
+│   │   │   │       ├── right_visual_middle_ip.stl
+│   │   │   │       ├── right_visual_middle_mp.stl
+│   │   │   │       ├── right_visual_middle_pp_skin.stl
+│   │   │   │       ├── right_visual_middle_pp.stl
+│   │   │   │       ├── right_visual_palm_skin.stl
+│   │   │   │       ├── right_visual_palm.stl
+│   │   │   │       ├── right_visual_pinky_ip_skin.stl
+│   │   │   │       ├── right_visual_pinky_ip.stl
+│   │   │   │       ├── right_visual_pinky_mp.stl
+│   │   │   │       ├── right_visual_pinky_pp_skin.stl
+│   │   │   │       ├── right_visual_pinky_pp.stl
+│   │   │   │       ├── right_visual_ring_ip_skin.stl
+│   │   │   │       ├── right_visual_ring_ip.stl
+│   │   │   │       ├── right_visual_ring_mp.stl
+│   │   │   │       ├── right_visual_ring_pp_skin.stl
+│   │   │   │       ├── right_visual_ring_pp.stl
+│   │   │   │       ├── right_visual_thumb_dp_skin.stl
+│   │   │   │       ├── right_visual_thumb_dp.stl
+│   │   │   │       ├── right_visual_thumb_ip_skin.stl
+│   │   │   │       ├── right_visual_thumb_ip.stl
+│   │   │   │       ├── right_visual_thumb_mp.stl
+│   │   │   │       ├── right_visual_thumb_pp.stl
+│   │   │   │       ├── right_visual_tower_camera.stl
+│   │   │   │       ├── right_visual_tower_fans.stl
+│   │   │   │       ├── right_visual_tower_hull.stl
+│   │   │   │       ├── right_visual_tower_main.stl
+│   │   │   │       ├── right_visual_tower_text.stl
+│   │   │   │       └── right_visual_tower_u2d2.stl
+│   │   │   └── scene.xml
+│   │   └── urdf
+│   │       ├── left
+│   │       │   ├── collision
+│   │       │   │   ├── left_collision_index_ip_mesh.stl
+│   │       │   │   ├── left_collision_index_ip_skin_mesh.stl
+│   │       │   │   ├── left_collision_index_mp_mesh.stl
+│   │       │   │   ├── left_collision_index_pp_mesh.stl
+│   │       │   │   ├── left_collision_index_pp_skin_mesh.stl
+│   │       │   │   ├── left_collision_middle_ip_mesh.stl
+│   │       │   │   ├── left_collision_middle_ip_skin_mesh.stl
+│   │       │   │   ├── left_collision_middle_mp_mesh.stl
+│   │       │   │   ├── left_collision_middle_pp_mesh.stl
+│   │       │   │   ├── left_collision_middle_pp_skin_mesh.stl
+│   │       │   │   ├── left_collision_palm_mesh.stl
+│   │       │   │   ├── left_collision_palm_skin_mesh.stl
+│   │       │   │   ├── left_collision_pinky_ip_mesh.stl
+│   │       │   │   ├── left_collision_pinky_ip_skin_mesh.stl
+│   │       │   │   ├── left_collision_pinky_mp_mesh.stl
+│   │       │   │   ├── left_collision_pinky_pp_mesh.stl
+│   │       │   │   ├── left_collision_pinky_pp_skin_mesh.stl
+│   │       │   │   ├── left_collision_ring_ip_mesh.stl
+│   │       │   │   ├── left_collision_ring_ip_skin_mesh.stl
+│   │       │   │   ├── left_collision_ring_mp_mesh.stl
+│   │       │   │   ├── left_collision_ring_pp_mesh.stl
+│   │       │   │   ├── left_collision_ring_pp_skin_mesh.stl
+│   │       │   │   ├── left_collision_thumb_dp_mesh.stl
+│   │       │   │   ├── left_collision_thumb_dp_skin_mesh.stl
+│   │       │   │   ├── left_collision_thumb_ip_mesh.stl
+│   │       │   │   ├── left_collision_thumb_ip_skin_mesh.stl
+│   │       │   │   ├── left_collision_thumb_mp_mesh.stl
+│   │       │   │   ├── left_collision_thumb_pp_mesh.stl
+│   │       │   │   ├── left_collision_tower_camera_mesh.stl
+│   │       │   │   ├── left_collision_tower_fans_mesh.stl
+│   │       │   │   ├── left_collision_tower_hull_mesh.stl
+│   │       │   │   ├── left_collision_tower_main_mesh.stl
+│   │       │   │   ├── left_collision_tower_text_mesh.stl
+│   │       │   │   └── left_collision_tower_u2d2_mesh.stl
+│   │       │   ├── ForeArmStructure-Model.stl
+│   │       │   ├── I-AP-L.stl
+│   │       │   ├── I-FingerTipAssembly.stl
+│   │       │   ├── I-L-Assembly.stl
+│   │       │   ├── I-PP.stl
+│   │       │   ├── L-Carpals.stl
+│   │       │   ├── L-T-AP.stl
+│   │       │   ├── M-AP.stl
+│   │       │   ├── M-Assembly.stl
+│   │       │   ├── M-FingerTipAssembly.stl
+│   │       │   ├── M-PP.stl
+│   │       │   ├── P-AP.stl
+│   │       │   ├── P-Assembly.stl
+│   │       │   ├── P-FingerTipAssembly.stl
+│   │       │   ├── P-PP.stl
+│   │       │   ├── T-DP.stl
+│   │       │   ├── T-L-Assembly.stl
+│   │       │   ├── TopTower-Model.stl
+│   │       │   ├── T-PP.stl
+│   │       │   ├── T-TP-L.stl
+│   │       │   └── visual
+│   │       │       ├── left_visual_index_ip_mesh.stl
+│   │       │       ├── left_visual_index_ip_skin_mesh.stl
+│   │       │       ├── left_visual_index_mp_mesh.stl
+│   │       │       ├── left_visual_index_pp_mesh.stl
+│   │       │       ├── left_visual_index_pp_skin_mesh.stl
+│   │       │       ├── left_visual_middle_ip_mesh.stl
+│   │       │       ├── left_visual_middle_ip_skin_mesh.stl
+│   │       │       ├── left_visual_middle_mp_mesh.stl
+│   │       │       ├── left_visual_middle_pp_mesh.stl
+│   │       │       ├── left_visual_middle_pp_skin_mesh.stl
+│   │       │       ├── left_visual_palm_mesh.stl
+│   │       │       ├── left_visual_palm_skin_mesh.stl
+│   │       │       ├── left_visual_pinky_ip_mesh.stl
+│   │       │       ├── left_visual_pinky_ip_skin_mesh.stl
+│   │       │       ├── left_visual_pinky_mp_mesh.stl
+│   │       │       ├── left_visual_pinky_pp_mesh.stl
+│   │       │       ├── left_visual_pinky_pp_skin_mesh.stl
+│   │       │       ├── left_visual_ring_ip_mesh.stl
+│   │       │       ├── left_visual_ring_ip_skin_mesh.stl
+│   │       │       ├── left_visual_ring_mp_mesh.stl
+│   │       │       ├── left_visual_ring_pp_mesh.stl
+│   │       │       ├── left_visual_ring_pp_skin_mesh.stl
+│   │       │       ├── left_visual_thumb_dp_mesh.stl
+│   │       │       ├── left_visual_thumb_dp_skin_mesh.stl
+│   │       │       ├── left_visual_thumb_ip_mesh.stl
+│   │       │       ├── left_visual_thumb_ip_skin_mesh.stl
+│   │       │       ├── left_visual_thumb_mp_mesh.stl
+│   │       │       ├── left_visual_thumb_pp_mesh.stl
+│   │       │       ├── left_visual_tower_camera_mesh.stl
+│   │       │       ├── left_visual_tower_fans_mesh.stl
+│   │       │       ├── left_visual_tower_hull_mesh.stl
+│   │       │       ├── left_visual_tower_main_mesh.stl
+│   │       │       ├── left_visual_tower_text_mesh.stl
+│   │       │       └── left_visual_tower_u2d2_mesh.stl
+│   │       └── right
+│   │           ├── collision
+│   │           │   ├── right_collision_index_ip_mesh.stl
+│   │           │   ├── right_collision_index_ip_skin_mesh.stl
+│   │           │   ├── right_collision_index_mp_mesh.stl
+│   │           │   ├── right_collision_index_pp_mesh.stl
+│   │           │   ├── right_collision_index_pp_skin_mesh.stl
+│   │           │   ├── right_collision_middle_ip_mesh.stl
+│   │           │   ├── right_collision_middle_ip_skin_mesh.stl
+│   │           │   ├── right_collision_middle_mp_mesh.stl
+│   │           │   ├── right_collision_middle_pp_mesh.stl
+│   │           │   ├── right_collision_middle_pp_skin_mesh.stl
+│   │           │   ├── right_collision_palm_mesh.stl
+│   │           │   ├── right_collision_palm_skin_mesh.stl
+│   │           │   ├── right_collision_pinky_ip_mesh.stl
+│   │           │   ├── right_collision_pinky_ip_skin_mesh.stl
+│   │           │   ├── right_collision_pinky_mp_mesh.stl
+│   │           │   ├── right_collision_pinky_pp_mesh.stl
+│   │           │   ├── right_collision_pinky_pp_skin_mesh.stl
+│   │           │   ├── right_collision_ring_ip_mesh.stl
+│   │           │   ├── right_collision_ring_ip_skin_mesh.stl
+│   │           │   ├── right_collision_ring_mp_mesh.stl
+│   │           │   ├── right_collision_ring_pp_mesh.stl
+│   │           │   ├── right_collision_ring_pp_skin_mesh.stl
+│   │           │   ├── right_collision_thumb_dp_mesh.stl
+│   │           │   ├── right_collision_thumb_dp_skin_mesh.stl
+│   │           │   ├── right_collision_thumb_ip_mesh.stl
+│   │           │   ├── right_collision_thumb_ip_skin_mesh.stl
+│   │           │   ├── right_collision_thumb_mp_mesh.stl
+│   │           │   ├── right_collision_thumb_pp_mesh.stl
+│   │           │   ├── right_collision_tower_camera_mesh.stl
+│   │           │   ├── right_collision_tower_fans_mesh.stl
+│   │           │   ├── right_collision_tower_hull_mesh.stl
+│   │           │   ├── right_collision_tower_main_mesh.stl
+│   │           │   ├── right_collision_tower_text_mesh.stl
+│   │           │   └── right_collision_tower_u2d2_mesh.stl
+│   │           ├── ForeArmStructure-Model.stl
+│   │           ├── I-AP-R.stl
+│   │           ├── I-FingerTipAssembly.stl
+│   │           ├── I-PP.stl
+│   │           ├── I-R-Assembly.stl
+│   │           ├── M-AP.stl
+│   │           ├── M-Assembly.stl
+│   │           ├── M-FingerTipAssembly.stl
+│   │           ├── M-PP.stl
+│   │           ├── P-AP.stl
+│   │           ├── P-Assembly.stl
+│   │           ├── P-FingerTipAssembly.stl
+│   │           ├── P-PP.stl
+│   │           ├── R-Carpals.stl
+│   │           ├── R-T-AP.stl
+│   │           ├── T-DP.stl
+│   │           ├── TopTower-Model.stl
+│   │           ├── T-PP.stl
+│   │           ├── T-R-Assembly.stl
+│   │           ├── T-TP-R.stl
+│   │           └── visual
+│   │               ├── right_visual_index_ip_mesh.stl
+│   │               ├── right_visual_index_ip_skin_mesh.stl
+│   │               ├── right_visual_index_mp_mesh.stl
+│   │               ├── right_visual_index_pp_mesh.stl
+│   │               ├── right_visual_index_pp_skin_mesh.stl
+│   │               ├── right_visual_middle_ip_mesh.stl
+│   │               ├── right_visual_middle_ip_skin_mesh.stl
+│   │               ├── right_visual_middle_mp_mesh.stl
+│   │               ├── right_visual_middle_pp_mesh.stl
+│   │               ├── right_visual_middle_pp_skin_mesh.stl
+│   │               ├── right_visual_palm_mesh.stl
+│   │               ├── right_visual_palm_skin_mesh.stl
+│   │               ├── right_visual_pinky_ip_mesh.stl
+│   │               ├── right_visual_pinky_ip_skin_mesh.stl
+│   │               ├── right_visual_pinky_mp_mesh.stl
+│   │               ├── right_visual_pinky_pp_mesh.stl
+│   │               ├── right_visual_pinky_pp_skin_mesh.stl
+│   │               ├── right_visual_ring_ip_mesh.stl
+│   │               ├── right_visual_ring_ip_skin_mesh.stl
+│   │               ├── right_visual_ring_mp_mesh.stl
+│   │               ├── right_visual_ring_pp_mesh.stl
+│   │               ├── right_visual_ring_pp_skin_mesh.stl
+│   │               ├── right_visual_thumb_dp_mesh.stl
+│   │               ├── right_visual_thumb_dp_skin_mesh.stl
+│   │               ├── right_visual_thumb_ip_mesh.stl
+│   │               ├── right_visual_thumb_ip_skin_mesh.stl
+│   │               ├── right_visual_thumb_mp_mesh.stl
+│   │               ├── right_visual_thumb_pp_mesh.stl
+│   │               ├── right_visual_tower_camera_mesh.stl
+│   │               ├── right_visual_tower_fans_mesh.stl
+│   │               ├── right_visual_tower_hull_mesh.stl
+│   │               ├── right_visual_tower_main_mesh.stl
+│   │               ├── right_visual_tower_text_mesh.stl
+│   │               └── right_visual_tower_u2d2_mesh.stl
+│   ├── CMakeLists.txt
+│   ├── lanzar_simulador.sh
+│   ├── launch
+│   │   └── orcahand.launch.py
+│   ├── LICENSE
+│   ├── mjmodel.xml
+│   ├── package.xml
+│   ├── README.md
+│   ├── rviz
+│   │   ├── config.rviz
+│   │   └── ros1.rviz
+│   ├── screenshot.png
+│   ├── tests
+│   │   ├── test_mjcf.py
+│   │   └── test_urdf.py
+│   ├── utils
+│   │   ├── mesh_utils.py
+│   │   └── utils_requirements.txt
+│   ├── v1
+│   │   ├── assets
+│   │   │   ├── mjcf
+│   │   │   │   ├── left
+│   │   │   │   │   ├── collision
+│   │   │   │   │   │   ├── left_collision_index_ip_skin.stl
+│   │   │   │   │   │   ├── left_collision_index_ip.stl
+│   │   │   │   │   │   ├── left_collision_index_mp.stl
+│   │   │   │   │   │   ├── left_collision_index_pp_skin.stl
+│   │   │   │   │   │   ├── left_collision_index_pp.stl
+│   │   │   │   │   │   ├── left_collision_middle_ip_skin.stl
+│   │   │   │   │   │   ├── left_collision_middle_ip.stl
+│   │   │   │   │   │   ├── left_collision_middle_mp.stl
+│   │   │   │   │   │   ├── left_collision_middle_pp_skin.stl
+│   │   │   │   │   │   ├── left_collision_middle_pp.stl
+│   │   │   │   │   │   ├── left_collision_palm_skin.stl
+│   │   │   │   │   │   ├── left_collision_palm.stl
+│   │   │   │   │   │   ├── left_collision_pinky_ip_skin.stl
+│   │   │   │   │   │   ├── left_collision_pinky_ip.stl
+│   │   │   │   │   │   ├── left_collision_pinky_mp.stl
+│   │   │   │   │   │   ├── left_collision_pinky_pp_skin.stl
+│   │   │   │   │   │   ├── left_collision_pinky_pp.stl
+│   │   │   │   │   │   ├── left_collision_ring_ip_skin.stl
+│   │   │   │   │   │   ├── left_collision_ring_ip.stl
+│   │   │   │   │   │   ├── left_collision_ring_mp.stl
+│   │   │   │   │   │   ├── left_collision_ring_pp_skin.stl
+│   │   │   │   │   │   ├── left_collision_ring_pp.stl
+│   │   │   │   │   │   ├── left_collision_thumb_dp_skin.stl
+│   │   │   │   │   │   ├── left_collision_thumb_dp.stl
+│   │   │   │   │   │   ├── left_collision_thumb_ip_skin.stl
+│   │   │   │   │   │   ├── left_collision_thumb_ip.stl
+│   │   │   │   │   │   ├── left_collision_thumb_mp.stl
+│   │   │   │   │   │   ├── left_collision_thumb_pp.stl
+│   │   │   │   │   │   ├── left_collision_tower_camera.stl
+│   │   │   │   │   │   ├── left_collision_tower_fans.stl
+│   │   │   │   │   │   ├── left_collision_tower_hull.stl
+│   │   │   │   │   │   ├── left_collision_tower_main.stl
+│   │   │   │   │   │   ├── left_collision_tower_text.stl
+│   │   │   │   │   │   └── left_collision_tower_u2d2.stl
+│   │   │   │   │   ├── ForeArmStructure-Model.stl
+│   │   │   │   │   ├── I-AP-L.stl
+│   │   │   │   │   ├── I-FingerTipAssembly.stl
+│   │   │   │   │   ├── I-L-Assembly.stl
+│   │   │   │   │   ├── I-PP.stl
+│   │   │   │   │   ├── L-Carpals.stl
+│   │   │   │   │   ├── L-T-AP.stl
+│   │   │   │   │   ├── M-AP.stl
+│   │   │   │   │   ├── M-Assembly.stl
+│   │   │   │   │   ├── M-FingerTipAssembly.stl
+│   │   │   │   │   ├── M-PP.stl
+│   │   │   │   │   ├── P-AP.stl
+│   │   │   │   │   ├── P-Assembly.stl
+│   │   │   │   │   ├── P-FingerTipAssembly.stl
+│   │   │   │   │   ├── P-PP.stl
+│   │   │   │   │   ├── T-DP.stl
+│   │   │   │   │   ├── T-L-Assembly.stl
+│   │   │   │   │   ├── TopTower-Model.stl
+│   │   │   │   │   ├── T-PP.stl
+│   │   │   │   │   ├── T-TP-L.stl
+│   │   │   │   │   └── visual
+│   │   │   │   │       ├── left_visual_index_ip_skin.stl
+│   │   │   │   │       ├── left_visual_index_ip.stl
+│   │   │   │   │       ├── left_visual_index_mp.stl
+│   │   │   │   │       ├── left_visual_index_pp_skin.stl
+│   │   │   │   │       ├── left_visual_index_pp.stl
+│   │   │   │   │       ├── left_visual_middle_ip_skin.stl
+│   │   │   │   │       ├── left_visual_middle_ip.stl
+│   │   │   │   │       ├── left_visual_middle_mp.stl
+│   │   │   │   │       ├── left_visual_middle_pp_skin.stl
+│   │   │   │   │       ├── left_visual_middle_pp.stl
+│   │   │   │   │       ├── left_visual_palm_skin.stl
+│   │   │   │   │       ├── left_visual_palm.stl
+│   │   │   │   │       ├── left_visual_pinky_ip_skin.stl
+│   │   │   │   │       ├── left_visual_pinky_ip.stl
+│   │   │   │   │       ├── left_visual_pinky_mp.stl
+│   │   │   │   │       ├── left_visual_pinky_pp_skin.stl
+│   │   │   │   │       ├── left_visual_pinky_pp.stl
+│   │   │   │   │       ├── left_visual_ring_ip_skin.stl
+│   │   │   │   │       ├── left_visual_ring_ip.stl
+│   │   │   │   │       ├── left_visual_ring_mp.stl
+│   │   │   │   │       ├── left_visual_ring_pp_skin.stl
+│   │   │   │   │       ├── left_visual_ring_pp.stl
+│   │   │   │   │       ├── left_visual_thumb_dp_skin.stl
+│   │   │   │   │       ├── left_visual_thumb_dp.stl
+│   │   │   │   │       ├── left_visual_thumb_ip_skin.stl
+│   │   │   │   │       ├── left_visual_thumb_ip.stl
+│   │   │   │   │       ├── left_visual_thumb_mp.stl
+│   │   │   │   │       ├── left_visual_thumb_pp.stl
+│   │   │   │   │       ├── left_visual_tower_camera.stl
+│   │   │   │   │       ├── left_visual_tower_fans.stl
+│   │   │   │   │       ├── left_visual_tower_hull.stl
+│   │   │   │   │       ├── left_visual_tower_main.stl
+│   │   │   │   │       ├── left_visual_tower_text.stl
+│   │   │   │   │       └── left_visual_tower_u2d2.stl
+│   │   │   │   ├── options.xml
+│   │   │   │   ├── right
+│   │   │   │   │   ├── collision
+│   │   │   │   │   │   ├── right_collision_index_ip_skin.stl
+│   │   │   │   │   │   ├── right_collision_index_ip.stl
+│   │   │   │   │   │   ├── right_collision_index_mp.stl
+│   │   │   │   │   │   ├── right_collision_index_pp_skin.stl
+│   │   │   │   │   │   ├── right_collision_index_pp.stl
+│   │   │   │   │   │   ├── right_collision_middle_ip_skin.stl
+│   │   │   │   │   │   ├── right_collision_middle_ip.stl
+│   │   │   │   │   │   ├── right_collision_middle_mp.stl
+│   │   │   │   │   │   ├── right_collision_middle_pp_skin.stl
+│   │   │   │   │   │   ├── right_collision_middle_pp.stl
+│   │   │   │   │   │   ├── right_collision_palm_skin.stl
+│   │   │   │   │   │   ├── right_collision_palm.stl
+│   │   │   │   │   │   ├── right_collision_pinky_ip_skin.stl
+│   │   │   │   │   │   ├── right_collision_pinky_ip.stl
+│   │   │   │   │   │   ├── right_collision_pinky_mp.stl
+│   │   │   │   │   │   ├── right_collision_pinky_pp_skin.stl
+│   │   │   │   │   │   ├── right_collision_pinky_pp.stl
+│   │   │   │   │   │   ├── right_collision_ring_ip_skin.stl
+│   │   │   │   │   │   ├── right_collision_ring_ip.stl
+│   │   │   │   │   │   ├── right_collision_ring_mp.stl
+│   │   │   │   │   │   ├── right_collision_ring_pp_skin.stl
+│   │   │   │   │   │   ├── right_collision_ring_pp.stl
+│   │   │   │   │   │   ├── right_collision_thumb_dp_skin.stl
+│   │   │   │   │   │   ├── right_collision_thumb_dp.stl
+│   │   │   │   │   │   ├── right_collision_thumb_ip_skin.stl
+│   │   │   │   │   │   ├── right_collision_thumb_ip.stl
+│   │   │   │   │   │   ├── right_collision_thumb_mp.stl
+│   │   │   │   │   │   ├── right_collision_thumb_pp.stl
+│   │   │   │   │   │   ├── right_collision_tower_camera.stl
+│   │   │   │   │   │   ├── right_collision_tower_fans.stl
+│   │   │   │   │   │   ├── right_collision_tower_hull.stl
+│   │   │   │   │   │   ├── right_collision_tower_main.stl
+│   │   │   │   │   │   ├── right_collision_tower_text.stl
+│   │   │   │   │   │   └── right_collision_tower_u2d2.stl
+│   │   │   │   │   ├── ForeArmStructure-Model.stl
+│   │   │   │   │   ├── I-AP-R.stl
+│   │   │   │   │   ├── I-FingerTipAssembly.stl
+│   │   │   │   │   ├── I-PP.stl
+│   │   │   │   │   ├── I-R-Assembly.stl
+│   │   │   │   │   ├── M-AP.stl
+│   │   │   │   │   ├── M-Assembly.stl
+│   │   │   │   │   ├── M-FingerTipAssembly.stl
+│   │   │   │   │   ├── M-PP.stl
+│   │   │   │   │   ├── P-AP.stl
+│   │   │   │   │   ├── P-Assembly.stl
+│   │   │   │   │   ├── P-FingerTipAssembly.stl
+│   │   │   │   │   ├── P-PP.stl
+│   │   │   │   │   ├── R-Carpals.stl
+│   │   │   │   │   ├── R-T-AP.stl
+│   │   │   │   │   ├── T-DP.stl
+│   │   │   │   │   ├── TopTower-Model.stl
+│   │   │   │   │   ├── T-PP.stl
+│   │   │   │   │   ├── T-R-Assembly.stl
+│   │   │   │   │   ├── T-TP-R.stl
+│   │   │   │   │   └── visual
+│   │   │   │   │       ├── right_visual_index_ip_skin.stl
+│   │   │   │   │       ├── right_visual_index_ip.stl
+│   │   │   │   │       ├── right_visual_index_mp.stl
+│   │   │   │   │       ├── right_visual_index_pp_skin.stl
+│   │   │   │   │       ├── right_visual_index_pp.stl
+│   │   │   │   │       ├── right_visual_middle_ip_skin.stl
+│   │   │   │   │       ├── right_visual_middle_ip.stl
+│   │   │   │   │       ├── right_visual_middle_mp.stl
+│   │   │   │   │       ├── right_visual_middle_pp_skin.stl
+│   │   │   │   │       ├── right_visual_middle_pp.stl
+│   │   │   │   │       ├── right_visual_palm_skin.stl
+│   │   │   │   │       ├── right_visual_palm.stl
+│   │   │   │   │       ├── right_visual_pinky_ip_skin.stl
+│   │   │   │   │       ├── right_visual_pinky_ip.stl
+│   │   │   │   │       ├── right_visual_pinky_mp.stl
+│   │   │   │   │       ├── right_visual_pinky_pp_skin.stl
+│   │   │   │   │       ├── right_visual_pinky_pp.stl
+│   │   │   │   │       ├── right_visual_ring_ip_skin.stl
+│   │   │   │   │       ├── right_visual_ring_ip.stl
+│   │   │   │   │       ├── right_visual_ring_mp.stl
+│   │   │   │   │       ├── right_visual_ring_pp_skin.stl
+│   │   │   │   │       ├── right_visual_ring_pp.stl
+│   │   │   │   │       ├── right_visual_thumb_dp_skin.stl
+│   │   │   │   │       ├── right_visual_thumb_dp.stl
+│   │   │   │   │       ├── right_visual_thumb_ip_skin.stl
+│   │   │   │   │       ├── right_visual_thumb_ip.stl
+│   │   │   │   │       ├── right_visual_thumb_mp.stl
+│   │   │   │   │       ├── right_visual_thumb_pp.stl
+│   │   │   │   │       ├── right_visual_tower_camera.stl
+│   │   │   │   │       ├── right_visual_tower_fans.stl
+│   │   │   │   │       ├── right_visual_tower_hull.stl
+│   │   │   │   │       ├── right_visual_tower_main.stl
+│   │   │   │   │       ├── right_visual_tower_text.stl
+│   │   │   │   │       └── right_visual_tower_u2d2.stl
+│   │   │   │   └── scene.xml
+│   │   │   └── urdf
+│   │   │       ├── left
+│   │   │       │   ├── collision
+│   │   │       │   │   ├── left_collision_index_ip_mesh.stl
+│   │   │       │   │   ├── left_collision_index_ip_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_index_mp_mesh.stl
+│   │   │       │   │   ├── left_collision_index_pp_mesh.stl
+│   │   │       │   │   ├── left_collision_index_pp_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_middle_ip_mesh.stl
+│   │   │       │   │   ├── left_collision_middle_ip_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_middle_mp_mesh.stl
+│   │   │       │   │   ├── left_collision_middle_pp_mesh.stl
+│   │   │       │   │   ├── left_collision_middle_pp_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_palm_mesh.stl
+│   │   │       │   │   ├── left_collision_palm_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_pinky_ip_mesh.stl
+│   │   │       │   │   ├── left_collision_pinky_ip_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_pinky_mp_mesh.stl
+│   │   │       │   │   ├── left_collision_pinky_pp_mesh.stl
+│   │   │       │   │   ├── left_collision_pinky_pp_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_ring_ip_mesh.stl
+│   │   │       │   │   ├── left_collision_ring_ip_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_ring_mp_mesh.stl
+│   │   │       │   │   ├── left_collision_ring_pp_mesh.stl
+│   │   │       │   │   ├── left_collision_ring_pp_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_thumb_dp_mesh.stl
+│   │   │       │   │   ├── left_collision_thumb_dp_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_thumb_ip_mesh.stl
+│   │   │       │   │   ├── left_collision_thumb_ip_skin_mesh.stl
+│   │   │       │   │   ├── left_collision_thumb_mp_mesh.stl
+│   │   │       │   │   ├── left_collision_thumb_pp_mesh.stl
+│   │   │       │   │   ├── left_collision_tower_camera_mesh.stl
+│   │   │       │   │   ├── left_collision_tower_fans_mesh.stl
+│   │   │       │   │   ├── left_collision_tower_hull_mesh.stl
+│   │   │       │   │   ├── left_collision_tower_main_mesh.stl
+│   │   │       │   │   ├── left_collision_tower_text_mesh.stl
+│   │   │       │   │   └── left_collision_tower_u2d2_mesh.stl
+│   │   │       │   ├── ForeArmStructure-Model.stl
+│   │   │       │   ├── I-AP-L.stl
+│   │   │       │   ├── I-FingerTipAssembly.stl
+│   │   │       │   ├── I-L-Assembly.stl
+│   │   │       │   ├── I-PP.stl
+│   │   │       │   ├── L-Carpals.stl
+│   │   │       │   ├── L-T-AP.stl
+│   │   │       │   ├── M-AP.stl
+│   │   │       │   ├── M-Assembly.stl
+│   │   │       │   ├── M-FingerTipAssembly.stl
+│   │   │       │   ├── M-PP.stl
+│   │   │       │   ├── P-AP.stl
+│   │   │       │   ├── P-Assembly.stl
+│   │   │       │   ├── P-FingerTipAssembly.stl
+│   │   │       │   ├── P-PP.stl
+│   │   │       │   ├── T-DP.stl
+│   │   │       │   ├── T-L-Assembly.stl
+│   │   │       │   ├── TopTower-Model.stl
+│   │   │       │   ├── T-PP.stl
+│   │   │       │   ├── T-TP-L.stl
+│   │   │       │   └── visual
+│   │   │       │       ├── left_visual_index_ip_mesh.stl
+│   │   │       │       ├── left_visual_index_ip_skin_mesh.stl
+│   │   │       │       ├── left_visual_index_mp_mesh.stl
+│   │   │       │       ├── left_visual_index_pp_mesh.stl
+│   │   │       │       ├── left_visual_index_pp_skin_mesh.stl
+│   │   │       │       ├── left_visual_middle_ip_mesh.stl
+│   │   │       │       ├── left_visual_middle_ip_skin_mesh.stl
+│   │   │       │       ├── left_visual_middle_mp_mesh.stl
+│   │   │       │       ├── left_visual_middle_pp_mesh.stl
+│   │   │       │       ├── left_visual_middle_pp_skin_mesh.stl
+│   │   │       │       ├── left_visual_palm_mesh.stl
+│   │   │       │       ├── left_visual_palm_skin_mesh.stl
+│   │   │       │       ├── left_visual_pinky_ip_mesh.stl
+│   │   │       │       ├── left_visual_pinky_ip_skin_mesh.stl
+│   │   │       │       ├── left_visual_pinky_mp_mesh.stl
+│   │   │       │       ├── left_visual_pinky_pp_mesh.stl
+│   │   │       │       ├── left_visual_pinky_pp_skin_mesh.stl
+│   │   │       │       ├── left_visual_ring_ip_mesh.stl
+│   │   │       │       ├── left_visual_ring_ip_skin_mesh.stl
+│   │   │       │       ├── left_visual_ring_mp_mesh.stl
+│   │   │       │       ├── left_visual_ring_pp_mesh.stl
+│   │   │       │       ├── left_visual_ring_pp_skin_mesh.stl
+│   │   │       │       ├── left_visual_thumb_dp_mesh.stl
+│   │   │       │       ├── left_visual_thumb_dp_skin_mesh.stl
+│   │   │       │       ├── left_visual_thumb_ip_mesh.stl
+│   │   │       │       ├── left_visual_thumb_ip_skin_mesh.stl
+│   │   │       │       ├── left_visual_thumb_mp_mesh.stl
+│   │   │       │       ├── left_visual_thumb_pp_mesh.stl
+│   │   │       │       ├── left_visual_tower_camera_mesh.stl
+│   │   │       │       ├── left_visual_tower_fans_mesh.stl
+│   │   │       │       ├── left_visual_tower_hull_mesh.stl
+│   │   │       │       ├── left_visual_tower_main_mesh.stl
+│   │   │       │       ├── left_visual_tower_text_mesh.stl
+│   │   │       │       └── left_visual_tower_u2d2_mesh.stl
+│   │   │       └── right
+│   │   │           ├── collision
+│   │   │           │   ├── right_collision_index_ip_mesh.stl
+│   │   │           │   ├── right_collision_index_ip_skin_mesh.stl
+│   │   │           │   ├── right_collision_index_mp_mesh.stl
+│   │   │           │   ├── right_collision_index_pp_mesh.stl
+│   │   │           │   ├── right_collision_index_pp_skin_mesh.stl
+│   │   │           │   ├── right_collision_middle_ip_mesh.stl
+│   │   │           │   ├── right_collision_middle_ip_skin_mesh.stl
+│   │   │           │   ├── right_collision_middle_mp_mesh.stl
+│   │   │           │   ├── right_collision_middle_pp_mesh.stl
+│   │   │           │   ├── right_collision_middle_pp_skin_mesh.stl
+│   │   │           │   ├── right_collision_palm_mesh.stl
+│   │   │           │   ├── right_collision_palm_skin_mesh.stl
+│   │   │           │   ├── right_collision_pinky_ip_mesh.stl
+│   │   │           │   ├── right_collision_pinky_ip_skin_mesh.stl
+│   │   │           │   ├── right_collision_pinky_mp_mesh.stl
+│   │   │           │   ├── right_collision_pinky_pp_mesh.stl
+│   │   │           │   ├── right_collision_pinky_pp_skin_mesh.stl
+│   │   │           │   ├── right_collision_ring_ip_mesh.stl
+│   │   │           │   ├── right_collision_ring_ip_skin_mesh.stl
+│   │   │           │   ├── right_collision_ring_mp_mesh.stl
+│   │   │           │   ├── right_collision_ring_pp_mesh.stl
+│   │   │           │   ├── right_collision_ring_pp_skin_mesh.stl
+│   │   │           │   ├── right_collision_thumb_dp_mesh.stl
+│   │   │           │   ├── right_collision_thumb_dp_skin_mesh.stl
+│   │   │           │   ├── right_collision_thumb_ip_mesh.stl
+│   │   │           │   ├── right_collision_thumb_ip_skin_mesh.stl
+│   │   │           │   ├── right_collision_thumb_mp_mesh.stl
+│   │   │           │   ├── right_collision_thumb_pp_mesh.stl
+│   │   │           │   ├── right_collision_tower_camera_mesh.stl
+│   │   │           │   ├── right_collision_tower_fans_mesh.stl
+│   │   │           │   ├── right_collision_tower_hull_mesh.stl
+│   │   │           │   ├── right_collision_tower_main_mesh.stl
+│   │   │           │   ├── right_collision_tower_text_mesh.stl
+│   │   │           │   └── right_collision_tower_u2d2_mesh.stl
+│   │   │           ├── ForeArmStructure-Model.stl
+│   │   │           ├── I-AP-R.stl
+│   │   │           ├── I-FingerTipAssembly.stl
+│   │   │           ├── I-PP.stl
+│   │   │           ├── I-R-Assembly.stl
+│   │   │           ├── M-AP.stl
+│   │   │           ├── M-Assembly.stl
+│   │   │           ├── M-FingerTipAssembly.stl
+│   │   │           ├── M-PP.stl
+│   │   │           ├── P-AP.stl
+│   │   │           ├── P-Assembly.stl
+│   │   │           ├── P-FingerTipAssembly.stl
+│   │   │           ├── P-PP.stl
+│   │   │           ├── R-Carpals.stl
+│   │   │           ├── R-T-AP.stl
+│   │   │           ├── T-DP.stl
+│   │   │           ├── TopTower-Model.stl
+│   │   │           ├── T-PP.stl
+│   │   │           ├── T-R-Assembly.stl
+│   │   │           ├── T-TP-R.stl
+│   │   │           └── visual
+│   │   │               ├── right_visual_index_ip_mesh.stl
+│   │   │               ├── right_visual_index_ip_skin_mesh.stl
+│   │   │               ├── right_visual_index_mp_mesh.stl
+│   │   │               ├── right_visual_index_pp_mesh.stl
+│   │   │               ├── right_visual_index_pp_skin_mesh.stl
+│   │   │               ├── right_visual_middle_ip_mesh.stl
+│   │   │               ├── right_visual_middle_ip_skin_mesh.stl
+│   │   │               ├── right_visual_middle_mp_mesh.stl
+│   │   │               ├── right_visual_middle_pp_mesh.stl
+│   │   │               ├── right_visual_middle_pp_skin_mesh.stl
+│   │   │               ├── right_visual_palm_mesh.stl
+│   │   │               ├── right_visual_palm_skin_mesh.stl
+│   │   │               ├── right_visual_pinky_ip_mesh.stl
+│   │   │               ├── right_visual_pinky_ip_skin_mesh.stl
+│   │   │               ├── right_visual_pinky_mp_mesh.stl
+│   │   │               ├── right_visual_pinky_pp_mesh.stl
+│   │   │               ├── right_visual_pinky_pp_skin_mesh.stl
+│   │   │               ├── right_visual_ring_ip_mesh.stl
+│   │   │               ├── right_visual_ring_ip_skin_mesh.stl
+│   │   │               ├── right_visual_ring_mp_mesh.stl
+│   │   │               ├── right_visual_ring_pp_mesh.stl
+│   │   │               ├── right_visual_ring_pp_skin_mesh.stl
+│   │   │               ├── right_visual_thumb_dp_mesh.stl
+│   │   │               ├── right_visual_thumb_dp_skin_mesh.stl
+│   │   │               ├── right_visual_thumb_ip_mesh.stl
+│   │   │               ├── right_visual_thumb_ip_skin_mesh.stl
+│   │   │               ├── right_visual_thumb_mp_mesh.stl
+│   │   │               ├── right_visual_thumb_pp_mesh.stl
+│   │   │               ├── right_visual_tower_camera_mesh.stl
+│   │   │               ├── right_visual_tower_fans_mesh.stl
+│   │   │               ├── right_visual_tower_hull_mesh.stl
+│   │   │               ├── right_visual_tower_main_mesh.stl
+│   │   │               ├── right_visual_tower_text_mesh.stl
+│   │   │               └── right_visual_tower_u2d2_mesh.stl
+│   │   ├── models
+│   │   │   ├── assets -> ../../assets
+│   │   │   ├── mjcf
+│   │   │   │   ├── assets
+│   │   │   │   │   └── mjcf
+│   │   │   │   │       ├── left
+│   │   │   │   │       │   ├── collision
+│   │   │   │   │       │   │   ├── left_collision_index_ip_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_index_ip.stl
+│   │   │   │   │       │   │   ├── left_collision_index_mp.stl
+│   │   │   │   │       │   │   ├── left_collision_index_pp_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_index_pp.stl
+│   │   │   │   │       │   │   ├── left_collision_middle_ip_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_middle_ip.stl
+│   │   │   │   │       │   │   ├── left_collision_middle_mp.stl
+│   │   │   │   │       │   │   ├── left_collision_middle_pp_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_middle_pp.stl
+│   │   │   │   │       │   │   ├── left_collision_palm_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_palm.stl
+│   │   │   │   │       │   │   ├── left_collision_pinky_ip_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_pinky_ip.stl
+│   │   │   │   │       │   │   ├── left_collision_pinky_mp.stl
+│   │   │   │   │       │   │   ├── left_collision_pinky_pp_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_pinky_pp.stl
+│   │   │   │   │       │   │   ├── left_collision_ring_ip_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_ring_ip.stl
+│   │   │   │   │       │   │   ├── left_collision_ring_mp.stl
+│   │   │   │   │       │   │   ├── left_collision_ring_pp_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_ring_pp.stl
+│   │   │   │   │       │   │   ├── left_collision_thumb_dp_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_thumb_dp.stl
+│   │   │   │   │       │   │   ├── left_collision_thumb_ip_skin.stl
+│   │   │   │   │       │   │   ├── left_collision_thumb_ip.stl
+│   │   │   │   │       │   │   ├── left_collision_thumb_mp.stl
+│   │   │   │   │       │   │   ├── left_collision_thumb_pp.stl
+│   │   │   │   │       │   │   ├── left_collision_tower_camera.stl
+│   │   │   │   │       │   │   ├── left_collision_tower_fans.stl
+│   │   │   │   │       │   │   ├── left_collision_tower_hull.stl
+│   │   │   │   │       │   │   ├── left_collision_tower_main.stl
+│   │   │   │   │       │   │   ├── left_collision_tower_text.stl
+│   │   │   │   │       │   │   └── left_collision_tower_u2d2.stl
+│   │   │   │   │       │   ├── ForeArmStructure-Model.stl
+│   │   │   │   │       │   ├── I-AP-L.stl
+│   │   │   │   │       │   ├── I-FingerTipAssembly.stl
+│   │   │   │   │       │   ├── I-L-Assembly.stl
+│   │   │   │   │       │   ├── I-PP.stl
+│   │   │   │   │       │   ├── L-Carpals.stl
+│   │   │   │   │       │   ├── L-T-AP.stl
+│   │   │   │   │       │   ├── M-AP.stl
+│   │   │   │   │       │   ├── M-Assembly.stl
+│   │   │   │   │       │   ├── M-FingerTipAssembly.stl
+│   │   │   │   │       │   ├── M-PP.stl
+│   │   │   │   │       │   ├── P-AP.stl
+│   │   │   │   │       │   ├── P-Assembly.stl
+│   │   │   │   │       │   ├── P-FingerTipAssembly.stl
+│   │   │   │   │       │   ├── P-PP.stl
+│   │   │   │   │       │   ├── T-DP.stl
+│   │   │   │   │       │   ├── T-L-Assembly.stl
+│   │   │   │   │       │   ├── TopTower-Model.stl
+│   │   │   │   │       │   ├── T-PP.stl
+│   │   │   │   │       │   ├── T-TP-L.stl
+│   │   │   │   │       │   └── visual
+│   │   │   │   │       │       ├── left_visual_index_ip_skin.stl
+│   │   │   │   │       │       ├── left_visual_index_ip.stl
+│   │   │   │   │       │       ├── left_visual_index_mp.stl
+│   │   │   │   │       │       ├── left_visual_index_pp_skin.stl
+│   │   │   │   │       │       ├── left_visual_index_pp.stl
+│   │   │   │   │       │       ├── left_visual_middle_ip_skin.stl
+│   │   │   │   │       │       ├── left_visual_middle_ip.stl
+│   │   │   │   │       │       ├── left_visual_middle_mp.stl
+│   │   │   │   │       │       ├── left_visual_middle_pp_skin.stl
+│   │   │   │   │       │       ├── left_visual_middle_pp.stl
+│   │   │   │   │       │       ├── left_visual_palm_skin.stl
+│   │   │   │   │       │       ├── left_visual_palm.stl
+│   │   │   │   │       │       ├── left_visual_pinky_ip_skin.stl
+│   │   │   │   │       │       ├── left_visual_pinky_ip.stl
+│   │   │   │   │       │       ├── left_visual_pinky_mp.stl
+│   │   │   │   │       │       ├── left_visual_pinky_pp_skin.stl
+│   │   │   │   │       │       ├── left_visual_pinky_pp.stl
+│   │   │   │   │       │       ├── left_visual_ring_ip_skin.stl
+│   │   │   │   │       │       ├── left_visual_ring_ip.stl
+│   │   │   │   │       │       ├── left_visual_ring_mp.stl
+│   │   │   │   │       │       ├── left_visual_ring_pp_skin.stl
+│   │   │   │   │       │       ├── left_visual_ring_pp.stl
+│   │   │   │   │       │       ├── left_visual_thumb_dp_skin.stl
+│   │   │   │   │       │       ├── left_visual_thumb_dp.stl
+│   │   │   │   │       │       ├── left_visual_thumb_ip_skin.stl
+│   │   │   │   │       │       ├── left_visual_thumb_ip.stl
+│   │   │   │   │       │       ├── left_visual_thumb_mp.stl
+│   │   │   │   │       │       ├── left_visual_thumb_pp.stl
+│   │   │   │   │       │       ├── left_visual_tower_camera.stl
+│   │   │   │   │       │       ├── left_visual_tower_fans.stl
+│   │   │   │   │       │       ├── left_visual_tower_hull.stl
+│   │   │   │   │       │       ├── left_visual_tower_main.stl
+│   │   │   │   │       │       ├── left_visual_tower_text.stl
+│   │   │   │   │       │       └── left_visual_tower_u2d2.stl
+│   │   │   │   │       └── right
+│   │   │   │   │           ├── collision
+│   │   │   │   │           │   ├── right_collision_index_ip_skin.stl
+│   │   │   │   │           │   ├── right_collision_index_ip.stl
+│   │   │   │   │           │   ├── right_collision_index_mp.stl
+│   │   │   │   │           │   ├── right_collision_index_pp_skin.stl
+│   │   │   │   │           │   ├── right_collision_index_pp.stl
+│   │   │   │   │           │   ├── right_collision_middle_ip_skin.stl
+│   │   │   │   │           │   ├── right_collision_middle_ip.stl
+│   │   │   │   │           │   ├── right_collision_middle_mp.stl
+│   │   │   │   │           │   ├── right_collision_middle_pp_skin.stl
+│   │   │   │   │           │   ├── right_collision_middle_pp.stl
+│   │   │   │   │           │   ├── right_collision_palm_skin.stl
+│   │   │   │   │           │   ├── right_collision_palm.stl
+│   │   │   │   │           │   ├── right_collision_pinky_ip_skin.stl
+│   │   │   │   │           │   ├── right_collision_pinky_ip.stl
+│   │   │   │   │           │   ├── right_collision_pinky_mp.stl
+│   │   │   │   │           │   ├── right_collision_pinky_pp_skin.stl
+│   │   │   │   │           │   ├── right_collision_pinky_pp.stl
+│   │   │   │   │           │   ├── right_collision_ring_ip_skin.stl
+│   │   │   │   │           │   ├── right_collision_ring_ip.stl
+│   │   │   │   │           │   ├── right_collision_ring_mp.stl
+│   │   │   │   │           │   ├── right_collision_ring_pp_skin.stl
+│   │   │   │   │           │   ├── right_collision_ring_pp.stl
+│   │   │   │   │           │   ├── right_collision_thumb_dp_skin.stl
+│   │   │   │   │           │   ├── right_collision_thumb_dp.stl
+│   │   │   │   │           │   ├── right_collision_thumb_ip_skin.stl
+│   │   │   │   │           │   ├── right_collision_thumb_ip.stl
+│   │   │   │   │           │   ├── right_collision_thumb_mp.stl
+│   │   │   │   │           │   ├── right_collision_thumb_pp.stl
+│   │   │   │   │           │   ├── right_collision_tower_camera.stl
+│   │   │   │   │           │   ├── right_collision_tower_fans.stl
+│   │   │   │   │           │   ├── right_collision_tower_hull.stl
+│   │   │   │   │           │   ├── right_collision_tower_main.stl
+│   │   │   │   │           │   ├── right_collision_tower_text.stl
+│   │   │   │   │           │   └── right_collision_tower_u2d2.stl
+│   │   │   │   │           ├── ForeArmStructure-Model.stl
+│   │   │   │   │           ├── I-AP-R.stl
+│   │   │   │   │           ├── I-FingerTipAssembly.stl
+│   │   │   │   │           ├── I-PP.stl
+│   │   │   │   │           ├── I-R-Assembly.stl
+│   │   │   │   │           ├── M-AP.stl
+│   │   │   │   │           ├── M-Assembly.stl
+│   │   │   │   │           ├── M-FingerTipAssembly.stl
+│   │   │   │   │           ├── M-PP.stl
+│   │   │   │   │           ├── P-AP.stl
+│   │   │   │   │           ├── P-Assembly.stl
+│   │   │   │   │           ├── P-FingerTipAssembly.stl
+│   │   │   │   │           ├── P-PP.stl
+│   │   │   │   │           ├── R-Carpals.stl
+│   │   │   │   │           ├── R-T-AP.stl
+│   │   │   │   │           ├── T-DP.stl
+│   │   │   │   │           ├── TopTower-Model.stl
+│   │   │   │   │           ├── T-PP.stl
+│   │   │   │   │           ├── T-R-Assembly.stl
+│   │   │   │   │           ├── T-TP-R.stl
+│   │   │   │   │           └── visual
+│   │   │   │   │               ├── right_visual_index_ip_skin.stl
+│   │   │   │   │               ├── right_visual_index_ip.stl
+│   │   │   │   │               ├── right_visual_index_mp.stl
+│   │   │   │   │               ├── right_visual_index_pp_skin.stl
+│   │   │   │   │               ├── right_visual_index_pp.stl
+│   │   │   │   │               ├── right_visual_middle_ip_skin.stl
+│   │   │   │   │               ├── right_visual_middle_ip.stl
+│   │   │   │   │               ├── right_visual_middle_mp.stl
+│   │   │   │   │               ├── right_visual_middle_pp_skin.stl
+│   │   │   │   │               ├── right_visual_middle_pp.stl
+│   │   │   │   │               ├── right_visual_palm_skin.stl
+│   │   │   │   │               ├── right_visual_palm.stl
+│   │   │   │   │               ├── right_visual_pinky_ip_skin.stl
+│   │   │   │   │               ├── right_visual_pinky_ip.stl
+│   │   │   │   │               ├── right_visual_pinky_mp.stl
+│   │   │   │   │               ├── right_visual_pinky_pp_skin.stl
+│   │   │   │   │               ├── right_visual_pinky_pp.stl
+│   │   │   │   │               ├── right_visual_ring_ip_skin.stl
+│   │   │   │   │               ├── right_visual_ring_ip.stl
+│   │   │   │   │               ├── right_visual_ring_mp.stl
+│   │   │   │   │               ├── right_visual_ring_pp_skin.stl
+│   │   │   │   │               ├── right_visual_ring_pp.stl
+│   │   │   │   │               ├── right_visual_thumb_dp_skin.stl
+│   │   │   │   │               ├── right_visual_thumb_dp.stl
+│   │   │   │   │               ├── right_visual_thumb_ip_skin.stl
+│   │   │   │   │               ├── right_visual_thumb_ip.stl
+│   │   │   │   │               ├── right_visual_thumb_mp.stl
+│   │   │   │   │               ├── right_visual_thumb_pp.stl
+│   │   │   │   │               ├── right_visual_tower_camera.stl
+│   │   │   │   │               ├── right_visual_tower_fans.stl
+│   │   │   │   │               ├── right_visual_tower_hull.stl
+│   │   │   │   │               ├── right_visual_tower_main.stl
+│   │   │   │   │               ├── right_visual_tower_text.stl
+│   │   │   │   │               └── right_visual_tower_u2d2.stl
+│   │   │   │   ├── orcahand_left_extended.mjcf
+│   │   │   │   ├── orcahand_left.mjcf
+│   │   │   │   ├── orcahand_right_extended.mjcf
+│   │   │   │   └── orcahand_right.mjcf
+│   │   │   └── urdf
+│   │   │       ├── orcahand_left_extended.urdf
+│   │   │       ├── orcahand_left.urdf
+│   │   │       ├── orcahand_right_extended.urdf
+│   │   │       └── orcahand_right.urdf
+│   │   ├── scene_combined_extended.xml
+│   │   ├── scene_combined.xml
+│   │   ├── scene_left_extended.xml
+│   │   ├── scene_left.xml
+│   │   ├── scene_right_extended.xml
+│   │   └── scene_right.xml
+│   └── v2
+│       ├── I+D+I_DENOMIN_GRUPO_RGB.png
+│       ├── models
+│       │   ├── assets
+│       │   │   ├── left
+│       │   │   │   ├── ForeArmStructure-Model_Logo.stl
+│       │   │   │   ├── ForeArmStructure-Model.stl
+│       │   │   │   ├── I-AP-L.stl
+│       │   │   │   ├── I-FingerTipAssembly_I-DP-Skin.stl
+│       │   │   │   ├── I-FingerTipAssembly_I-IP.stl
+│       │   │   │   ├── I-FingerTipAssembly.stl
+│       │   │   │   ├── I-IP_IP.stl
+│       │   │   │   ├── I-L-Assembly.stl
+│       │   │   │   ├── I-PP_PP.stl
+│       │   │   │   ├── I-PP_Skin.stl
+│       │   │   │   ├── I-PP.stl
+│       │   │   │   ├── L-Carpals_CarpalsTeeth.stl
+│       │   │   │   ├── L-Carpals_CORE.stl
+│       │   │   │   ├── L-Carpals.stl
+│       │   │   │   ├── L-T-AP.stl
+│       │   │   │   ├── M-AP.stl
+│       │   │   │   ├── M-Assembly.stl
+│       │   │   │   ├── M-FingerTipAssembly_M-DP-Skin.stl
+│       │   │   │   ├── M-FingerTipAssembly_M-IP.stl
+│       │   │   │   ├── M-FingerTipAssembly.stl
+│       │   │   │   ├── M-IP_IP.stl
+│       │   │   │   ├── M-PP_PP.stl
+│       │   │   │   ├── M-PP_Skin.stl
+│       │   │   │   ├── M-PP.stl
+│       │   │   │   ├── P-AP.stl
+│       │   │   │   ├── P-Assembly.stl
+│       │   │   │   ├── P-FingerTipAssembly_P-DP-Skin.stl
+│       │   │   │   ├── P-FingerTipAssembly_P-IP.stl
+│       │   │   │   ├── P-FingerTipAssembly.stl
+│       │   │   │   ├── P-IP_IP.stl
+│       │   │   │   ├── P-PP_PP.stl
+│       │   │   │   ├── P-PP_Skin.stl
+│       │   │   │   ├── P-PP.stl
+│       │   │   │   ├── T-DP_Skin.stl
+│       │   │   │   ├── T-DP.stl
+│       │   │   │   ├── T-DP_T-DP.stl
+│       │   │   │   ├── T-L-Assembly.stl
+│       │   │   │   ├── TopTower-Model.stl
+│       │   │   │   ├── T-PP_PP.stl
+│       │   │   │   ├── T-PP_Skin.stl
+│       │   │   │   ├── T-PP.stl
+│       │   │   │   └── T-TP-L.stl
+│       │   │   ├── Logo_Elecnor_AZUL.png
+│       │   │   ├── Nombres_Naranja.png
+│       │   │   ├── options.xml
+│       │   │   ├── right
+│       │   │   │   ├── ForeArmStructure-Model_Logo.stl
+│       │   │   │   ├── ForeArmStructure-Model.stl
+│       │   │   │   ├── I-AP-R_AP.stl
+│       │   │   │   ├── I-AP-R.stl
+│       │   │   │   ├── I-FingerTipAssembly_I-DP-Skin.stl
+│       │   │   │   ├── I-FingerTipAssembly_I-IP.stl
+│       │   │   │   ├── I-FingerTipAssembly.stl
+│       │   │   │   ├── I-IP_IP.stl
+│       │   │   │   ├── I-PP_PP.stl
+│       │   │   │   ├── I-PP_Skin.stl
+│       │   │   │   ├── I-PP.stl
+│       │   │   │   ├── I-R-Assembly.stl
+│       │   │   │   ├── Logo.stl
+│       │   │   │   ├── M-AP_AP.stl
+│       │   │   │   ├── M-AP.stl
+│       │   │   │   ├── M-Assembly.stl
+│       │   │   │   ├── M-FingerTipAssembly_M-DP-Skin.stl
+│       │   │   │   ├── M-FingerTipAssembly_M-IP.stl
+│       │   │   │   ├── M-FingerTipAssembly.stl
+│       │   │   │   ├── M-IP_IP.stl
+│       │   │   │   ├── M-PP_PP.stl
+│       │   │   │   ├── M-PP_Skin.stl
+│       │   │   │   ├── M-PP.stl
+│       │   │   │   ├── P-AP_AP.stl
+│       │   │   │   ├── P-AP.stl
+│       │   │   │   ├── P-Assembly.stl
+│       │   │   │   ├── P-FingerTipAssembly_P-DP-Skin.stl
+│       │   │   │   ├── P-FingerTipAssembly_P-IP.stl
+│       │   │   │   ├── P-FingerTipAssembly.stl
+│       │   │   │   ├── P-IP_IP.stl
+│       │   │   │   ├── P-PP_PP.stl
+│       │   │   │   ├── P-PP_Skin.stl
+│       │   │   │   ├── P-PP.stl
+│       │   │   │   ├── R-Carpals_CarpalsTeeth.stl
+│       │   │   │   ├── R-Carpals_CORE.stl
+│       │   │   │   ├── R-Carpals_Skin.stl
+│       │   │   │   ├── R-Carpals.stl
+│       │   │   │   ├── R-T-AP_AP.stl
+│       │   │   │   ├── R-T-AP.stl
+│       │   │   │   ├── T-DP_Skin.stl
+│       │   │   │   ├── T-DP.stl
+│       │   │   │   ├── T-DP_T-DP.stl
+│       │   │   │   ├── TopTower-Model.stl
+│       │   │   │   ├── T-PP_PP.stl
+│       │   │   │   ├── T-PP_Skin.stl
+│       │   │   │   ├── T-PP.stl
+│       │   │   │   ├── T-R-Assembly.stl
+│       │   │   │   └── T-TP-R.stl
+│       │   │   └── scene.xml
+│       │   ├── mjcf
+│       │   │   ├── orcahand_left_body.xml
+│       │   │   ├── orcahand_left.mjcf
+│       │   │   ├── orcahand_left_tron2.xml
+│       │   │   ├── orcahand_left.xml
+│       │   │   ├── orcahand_right_body.xml
+│       │   │   ├── orcahand_right.mjcf
+│       │   │   ├── orcahand_right_tron2.xml
+│       │   │   └── orcahand_right.xml
+│       │   └── urdf
+│       │       ├── orcahand_left.urdf
+│       │       └── orcahand_right.urdf
+│       ├── scene_combined.xml
+│       ├── scene_left.xml
+│       └── scene_right.xml
 ├── package.xml
+├── pose_landmarker_full.task
 ├── __pycache__
+│   ├── biomecanica.cpython-312.pyc
 │   ├── camaras.cpython-312.pyc
+│   ├── config.cpython-312.pyc
 │   ├── escenario_tuberias.cpython-312.pyc
+│   ├── fusion.cpython-312.pyc
+│   ├── mano_orca.cpython-312.pyc
+│   ├── retargeting.cpython-312.pyc
 │   ├── robot_tron2.cpython-312.pyc
 │   ├── seguimiento_brazos.cpython-312.pyc
-│   └── seguimiento_manos.cpython-312.pyc
+│   ├── seguimiento_manos.cpython-312.pyc
+│   └── suavizador.cpython-312.pyc
 ├── README.md
 ├── requirements.txt
+├── retargeting.py
 ├── robot_tron2.py
 ├── seguimiento_brazos.py
 ├── seguimiento_manos.py
+├── suavizador.py
+├── taladro
+│   ├── drill.obj
+│   ├── escena_taladro.xml
+│   ├── piezas
+│   │   ├── bateria.obj
+│   │   ├── broca.obj
+│   │   ├── cuerpo.obj
+│   │   ├── empunadura.obj
+│   │   └── portabrocas.obj
+│   ├── preparando_taladro.py
+│   └── textures_detailed.zip
 ├── teleop_tron2.py
 ├── tree.txt
 ├── tron2a
@@ -419,4 +1653,4 @@
 │           └── robot.xml
 └── ver_tron2.py
 
-60 directories, 360 files
+145 directories, 1509 files

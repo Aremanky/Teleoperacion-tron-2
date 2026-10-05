@@ -75,10 +75,11 @@ PINZA_JUNTAS_INVERTIDAS = ()
 # Recorrido a mano para juntas de la pinza SIN limites en el XML (no se puede
 # adivinar): {"grasper_L_jaw_left_Joint": (cerrado, abierto), ...}
 PINZA_RECORRIDO = {}
-VEL_TRANSICION = 1.5   # rad/s: al cambiar a otra solucion tras un rescate
+VEL_TRANSICION = 1.0   # rad/s: al cambiar a otra solucion tras un rescate (antes 1.5: mas brusco)
 MARGEN_LIMITE = 0.1    # rad: junto a un limite se empuja la articulacion hacia dentro
-ERROR_ATASCO = 0.08    # m: error a partir del cual se considera que el brazo esta atascado
-T_ATASCO = 0.5         # s: tiempo atascado antes de buscar otra solucion
+ERROR_ATASCO = 0.10    # m: error a partir del cual se considera que el brazo esta atascado (antes 0.08)
+T_ATASCO = 1.0         # s: tiempo atascado antes de buscar otra solucion (antes 0.5: el rescate
+                       #    saltaba en cuanto el objetivo se movia deprisa y daba tirones)
 MEJORA_MIN = 0.05      # m/s: si el error baja mas rapido que esto, el brazo NO esta atascado
                        #      (solo va alcanzando un objetivo que ha saltado): no hay rescate
 T_TRANSICION_MAX = 2.0 # s: una transicion de rescate nunca dura mas que esto
@@ -534,7 +535,8 @@ class Brazo:
                 semillas.append(s)
         lo = np.where(self.limitado, self.lo, -np.pi)
         hi = np.where(self.limitado, self.hi, np.pi)
-        semillas += [self.rng.uniform(lo, hi) for _ in range(3)]
+        # (antes aqui se anadian 3 posturas ALEATORIAS: el rescate podia saltar a una postura
+        #  cualquiera, distinta en cada intento, y eso eran los movimientos erraticos del brazo)
 
         mejor_q, mejor_err = q_act, np.inf
         for s in semillas:
