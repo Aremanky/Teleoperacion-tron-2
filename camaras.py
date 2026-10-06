@@ -42,7 +42,9 @@ MIN_GIRO_MOV = 2.0     # deg girados para que cuente como "la han movido" (un go
 MIN_INCL_MOV = 1.5     # deg de cambio de inclinacion, idem
 MIN_DESPL_MOV = 0.04   # m de desplazamiento estimado para contar como desplazada
 GIRO_EXCLUIR = 1.5     # deg: girada mas que esto, la fusion deja de usarla hasta que pare
-DESPL_EXCLUIR = 0.02   # m: desplazada mas que esto, idem
+DESPL_EXCLUIR = 0.02   # m: desplazada mas que esto (ademas del error de integrar), idem
+ALFA_LENTO = 0.02      # media lenta de la aceleracion (~0.5 s a 100 Hz): "quieta" = sin cambios
+                       # respecto a ella, no respecto a la gravedad de antes (ver EstadoIMU)
 
 
 def _unitario(v):
@@ -65,6 +67,20 @@ class EstadoIMU:
 
     R: rotacion IMU -> camara RGB (de la calibracion de fabrica). Sin ella se sigue
     detectando el movimiento, pero no se puede dar la gravedad en el marco de la camara.
+
+    (demo oct-2026) Con el tripode balanceandose +-0.25 grados porque alguien pasa al lado:
+      - el giro se integraba como suma de |w|: el vaiven (y el ruido) se acumulaba sin
+        parar (18 grados en 6 s) -> "girando" -> la fusion dejaba la camara fuera y al
+        final contaba un movimiento falso que tiraba la calibracion. Ahora se integra el
+        VECTOR de giro: un vaiven va y vuelve y suma ~0; un giro real si se acumula.
+      - "quieta" se comparaba con la gravedad de referencia, y esa referencia se seguia
+        actualizando en los instantes "quietos" DENTRO de la vibracion (sesgados por la
+        fase): acababa desviada y la camara ya no volvia a estar quieta hasta pasados
+        T_MAX_MOVIENDO (10 s fuera de la fusion). Ahora "quieta" = la aceleracion no cambia
+        respecto a su media lenta; la gravedad solo se actualiza fuera de un movimiento y,
+        al terminarlo, con la media de la ventana ya asentada.
+      - el desplazamiento integrado dos veces deriva con el ruido: para dejar la camara
+        fuera mientras se mueve se exige superar ademas ese error de integracion.
     """
 
     def __init__(self, R_imu_cam=None):
@@ -89,6 +105,10 @@ class EstadoIMU:
         self._umbral_giro, self._umbral_acc = UMBRAL_GIRO, UMBRAL_ACC
         self._w_f = np.zeros(3)      # giro y aceleracion suavizados
         self._a_f = None
+        self._a_lento = None         # media lenta de la aceleracion (referencia de "quieta")
+        self._rotv = np.zeros(3)     # vector de giro integrado en el movimiento en curso (rad)
+        self._suma_asentada = np.zeros(3)   # aceleracion acumulada desde que dejo de moverse
+        self._n_asentada = 0
         self.reinicios = 0           # veces que se ha recalibrado por creerse en movimiento sin parar
         self.movimientos = 0         # cuantas veces la han movido "de verdad"
         self.ultimo_mov = None       # dict(giro, incl, despl, rotacion) del ultimo movimiento contado
@@ -106,11 +126,11 @@ class EstadoIMU:
                 self._arrancar(acc, gyro, t)
                 return
             w = gyro - self._sesgo
-            nw = float(np.linalg.norm(w))
             self._w_f += SUAVIZADO * (w - self._w_f)
             self._a_f += SUAVIZADO * (acc - self._a_f)
+            self._a_lento += ALFA_LENTO * (acc - self._a_lento)
             quieta = (float(np.linalg.norm(self._w_f)) < self._umbral_giro
-                      and float(np.linalg.norm(self._a_f - self._g)) < self._umbral_acc)
+                      and float(np.linalg.norm(self._a_f - self._a_lento)) < self._umbral_acc)
             if self._moviendo and t - self._t_ini > T_MAX_MOVIENDO:
                 # Diez segundos "moviendose" sin parar: casi seguro es el sensor (sesgo que
                 # ha cambiado, ruido mayor del medido). Se vuelve a medir, sin contar movimiento.
@@ -118,18 +138,26 @@ class EstadoIMU:
                 self.reinicios += 1
                 return
             if quieta:
-                self._sesgo += 0.002 * (gyro - self._sesgo)
-                self._g += 0.05 * (acc - self._g)     # en reposo el acelerometro mide +g hacia arriba
-                self._g_lento += 0.005 * (acc - self._g_lento)
+                self._suma_asentada += acc
+                self._n_asentada += 1
+                if not self._moviendo:
+                    # solo con la camara asentada (fuera de un movimiento): dentro de una
+                    # vibracion los instantes "quietos" estan sesgados por la fase
+                    self._sesgo += 0.002 * (gyro - self._sesgo)
+                    self._g += 0.05 * (acc - self._g)     # en reposo el acelerometro mide +g hacia arriba
+                    self._g_lento += 0.005 * (acc - self._g_lento)
             else:
                 self._t_activo = t
+                self._suma_asentada, self._n_asentada = np.zeros(3), 0
                 if not self._moviendo:
                     self._moviendo, self._giro = True, 0.0
+                    self._rotv = np.zeros(3)
                     self._vel, self._despl, self._despl_max = np.zeros(3), np.zeros(3), 0.0
                     self._t_ini, self._v_log = t, []
                     self._g_ini = self._g_lento.copy()
             if self._moviendo:
-                self._giro += float(np.degrees(nw)) * dt
+                self._rotv += w * dt          # vector (aprox. angulos pequenos): el vaiven se anula
+                self._giro = float(np.degrees(np.linalg.norm(self._rotv)))
                 self._vel += (acc - self._g_ini) * dt
                 self._despl += self._vel * dt
                 self._despl_max = max(self._despl_max, float(np.linalg.norm(self._despl)))
@@ -137,6 +165,8 @@ class EstadoIMU:
                     self._v_log.append((t - self._t_ini, self._vel.copy()))
                 if t - self._t_activo > T_ASENTADA:
                     self._moviendo = False
+                    if self._n_asentada > 0:      # gravedad nueva: media de la ventana ya asentada
+                        self._g = self._suma_asentada / self._n_asentada
                     self._g_lento = self._g.copy()
                     c = np.dot(_unitario(self._g_ini), _unitario(self._g))
                     incl = float(np.degrees(np.arccos(np.clip(c, -1, 1))))
@@ -169,7 +199,8 @@ class EstadoIMU:
             self._g_lento = self._g.copy()
         self._umbral_giro = max(UMBRAL_GIRO, k * ruido_giro)
         self._umbral_acc = max(UMBRAL_ACC, k * ruido_acc)
-        self._w_f, self._a_f = np.zeros(3), self._g.copy()
+        self._w_f, self._a_f, self._a_lento = np.zeros(3), self._g.copy(), self._g.copy()
+        self._suma_asentada, self._n_asentada = np.zeros(3), 0
         self._listo = True
 
     def umbrales(self):
@@ -204,9 +235,14 @@ class EstadoIMU:
             return self._listo and self._moviendo and self._giro > GIRO_EXCLUIR
 
     def desplazandose(self):
-        """True mientras la estan desplazando de forma apreciable (aunque no gire)."""
+        """True mientras la estan desplazando de forma apreciable (aunque no gire): mas de
+        DESPL_EXCLUIR por encima de lo que deriva la doble integracion con el ruido del
+        acelerometro (~ umbral * T^2 / 2)."""
         with self._lock:
-            return self._listo and self._moviendo and self._despl_max > DESPL_EXCLUIR
+            if not (self._listo and self._moviendo):
+                return False
+            T = (self._t or 0.0) - self._t_ini
+            return self._despl_max > DESPL_EXCLUIR + 0.5 * self._umbral_acc * T * T
 
     def en_movimiento(self):
         with self._lock:

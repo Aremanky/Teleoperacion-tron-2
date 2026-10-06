@@ -112,7 +112,6 @@ KAPPA_CRUCE_CARA = 0.90
 TAU_CONTINUIDAD = 3.0         # grados: entre dos fotos seguidas un brazo apenas se mueve
 RATIO_MAX = 1e4               # una sola foto no puede decidir mas que esto (por si hay un error raro)
 TAU_ENTRE_CAMARAS = 15.0      # grados: dos camaras calibradas ven el mismo brazo casi igual
-TAU_INVARIANTE = 25.0         # grados (flexion + elevacion) entre camaras sin calibrar
 T_CONTINUIDAD = 0.2           # s: mas separadas, dos fotos no dicen nada de continuidad
 ETIQUETAS = "ABCD"
 OTRO = {"L": "R", "R": "L"}
@@ -182,6 +181,8 @@ INLIERS_H_OK = 0.65           # fraccion de esas parejas que cuadran (a menos de
 DISPERSION_AZ_MAX = 0.8       # direcciones variadas (no todas en un mismo plano vertical)
 AMBIGUEDAD_MAX = 0.3          # otra solucion distinta no puede tener ni un 30 % del apoyo
 RES_LIBRE_OK = 10.0           # sin IMU: mas exigente que con ella
+IMU_INCOHERENTE_DEG = 4.0     # la solucion libre (sin IMU) difiere de la de gravedad mas que esto...
+MEJORA_LIBRE_DEG = 1.5        # ...y encaja mejor por este margen (mediana): la IMU de esa camara miente
 INLIERS_LIBRE_OK = 0.7
 MAX_DERIVA = 8.0              # deg: el afinado automatico no aleja una camara mas que esto de
                               # su calibracion de referencia (la de la c o la aceptada)
@@ -209,6 +210,11 @@ ERROR_T_OK = 0.02             # m: error tipico de la posicion estimada para dar
 RUIDO_T_MAX = 0.20            # m: muestras mas ruidosas que esto (por eje): algo va mal
 REFINO_T = 0.2
 RES_T_MOVIDA = 0.20           # m: residuos recientes por encima: la camara se ha movido
+DESPL_CONFIRMADO = 0.03       # m: tras un aviso de desplazamiento de la IMU, lo que tiene que haberse
+                              # movido segun las medidas del cuerpo (antes frente a despues) para creerselo
+DESPL_CONFIRMADO_SIN_REF = 0.10   # m: idem si no habia medidas de antes: se compara con la posicion
+                                  # guardada, y la del cuerpo tiene unos cm de sesgo (piel, ruido)
+T_VERIFICAR_MAX = 20.0        # s: sin medidas para comprobarlo, se deja como estaba
 
 
 # ================================================================== utilidades
@@ -498,10 +504,19 @@ class FiltroCruces:
       - continuidad: entre dos fotos seguidas de una camara los brazos apenas se mueven;
         si de repente su brazo 'L' se parece al 'R' de la foto anterior, MediaPipe ha
         cambiado las etiquetas (no hace falta calibracion);
-      - acuerdo entre camaras: calibradas, el mismo brazo apunta igual en las dos; sin
-        calibrar, flexion y elevacion de cada brazo coinciden;
+      - acuerdo entre camaras: SOLO entre camaras calibradas y en uso (el mismo brazo apunta
+        igual en las dos);
       - MediaPipe suele acertar, mas aun si ve la cara: solo como tendencia, no como regla.
-    Con los brazos simetricos no hay evidencia y no se decide nada a la ligera."""
+    Con los brazos simetricos no hay evidencia y no se decide nada a la ligera.
+
+    (oct-2026) Antes tambien se comparaban camaras SIN calibrar entre si con rasgos
+    invariantes (flexion + elevacion). Con los brazos colgando esos rasgos son iguales en
+    los dos brazos y la diferencia es ruido/sesgo de cada camara, que se acumulaba foto a
+    foto como si fuera evidencia independiente. El filtro solo sabe que "A y B no cuadran":
+    para decidir CUAL esta cruzada tira de la cara, y en la demo A (que movia el robot) no
+    veia la cabeza y B si -> se daba la vuelta a A y el robot cruzaba los brazos con el
+    operador quieto. Una camara sin calibrar no esta en la fusion: sus cruces no importan
+    para el robot (la calibracion automatica decide los suyos con cruce_invariante())."""
 
     def __init__(self, n):
         self.n = n
@@ -549,19 +564,10 @@ class FiltroCruces:
                     continue
                 if not snaps[i]["brazos"] or not snaps[j]["brazos"]:
                     continue
-                if i in calibradas and j in calibradas:
-                    d = _distancias_cruce(snaps[i]["brazos"], snaps[j]["brazos"], R[i], R[j])
-                    tau = TAU_ENTRE_CAMARAS
-                else:
-                    ra, rb = _rasgos(snaps[i]), _rasgos(snaps[j])
-                    d = None
-                    if len(ra) == 2 and len(rb) == 2:
-                        def dist(x, y):
-                            v = abs(x[0] - y[0])
-                            return v + (abs(x[1] - y[1]) if x[1] is not None and y[1] is not None else 0.0)
-                        d = (dist(ra["L"], rb["L"]) + dist(ra["R"], rb["R"]),
-                             dist(ra["L"], rb["R"]) + dist(ra["R"], rb["L"]))
-                    tau = TAU_INVARIANTE
+                if i not in calibradas or j not in calibradas:
+                    continue        # sin calibracion entre ellas no hay evidencia fiable (ver arriba)
+                d = _distancias_cruce(snaps[i]["brazos"], snaps[j]["brazos"], R[i], R[j])
+                tau = TAU_ENTRE_CAMARAS
                 if d is None:
                     continue
                 r = float(np.clip((d[1] - d[0]) / tau, -np.log(RATIO_MAX), np.log(RATIO_MAX)))
@@ -827,8 +833,20 @@ class SolucionadorRotacion:
         if A is None or len(W) < MIN_PARES:
             return None
         R, modo = None, "libre"
+        imu_incoherente = None
         if arriba_obj is not None and arriba_cam is not None:
             R, modo = self._con_gravedad(A, B, W, arriba_obj, arriba_cam), "gravedad"
+            if R is not None:
+                # (demo oct-2026) Si la gravedad de la IMU de esta camara esta desviada (extrinseca
+                # IMU->RGB, sesgo), el modo gravedad hereda ese error en la inclinacion y aun asi
+                # encaja "bastante" (residuo 12-17 grados): se acepto una calibracion a ~20-30
+                # grados de la buena. La solucion libre (sin IMU) lo destapa: si encaja claramente
+                # mejor y es otra, la IMU de esta camara no es fiable y se usa la libre.
+                R_l = self._libre(A, B, W, R)
+                med = lambda Rx: float(np.median(self.residuos_deg(Rx, A, B)))
+                dif = angulo_rotacion_deg(R_l @ R.T)
+                if dif > IMU_INCOHERENTE_DEG and med(R_l) + MEJORA_LIBRE_DEG < med(R):
+                    R, modo, imu_incoherente = R_l, "libre", dif
         if R is None:
             R, modo = self._libre(A, B, W, R0), "libre"
         r = self.residuos_deg(R, A, B)
@@ -840,7 +858,10 @@ class SolucionadorRotacion:
             Bo = B @ R.T
             variedad = float(np.sum(W * (1 - (Bo @ u) ** 2)) / W.sum())
             calidad = self._calidad_horizontal(A, Bo, W, u)
-            ok = (len(W) >= MIN_PARES_ACEPTAR and calidad["n_h"] >= MIN_HORIZONTALES
+            # (demo oct-2026) tambien el residuo GLOBAL: se acepto una solucion con 17 grados de
+            # mediana (parejas sin estructura: con ruido real una buena da 8-13) que estaba a 30
+            # grados de la buena; la fusion la tuvo que apartar enseguida ("NO CUADRA").
+            ok = (len(W) >= MIN_PARES_ACEPTAR and mediana <= RES_MAX_OK and calidad["n_h"] >= MIN_HORIZONTALES
                   and calidad["mediana_h"] <= RES_H_OK and calidad["inliers_h"] >= INLIERS_H_OK
                   and calidad["dispersion"] <= DISPERSION_AZ_MAX and calidad["ambiguedad"] <= AMBIGUEDAD_MAX)
         else:
@@ -850,7 +871,7 @@ class SolucionadorRotacion:
             ok = (len(W) >= MIN_PARES_ACEPTAR and inliers >= INLIERS_LIBRE_OK
                   and mediana <= RES_LIBRE_OK and variedad >= VARIEDAD_MIN[modo])
         return dict(R=R, ok=ok, n=len(W), mediana=mediana, inliers=inliers, variedad=variedad, modo=modo,
-                    **calidad)
+                    imu_incoherente=imu_incoherente, **calidad)
 
     @staticmethod
     def _calidad_horizontal(A, Bo, W, u):
@@ -953,6 +974,7 @@ class SolucionadorTraslacion:
 
 # ================================================================== extrinsecas (ChArUco)
 EXTRINSECAS_ARCHIVO = "camaras_extrinsecas.json"
+motivo_sin_extrinsecas = None     # por que no se cargaron en la ultima llamada a cargar_extrinsecas()
 
 
 def ruta_extrinsecas(ruta=None):
@@ -966,8 +988,11 @@ def cargar_extrinsecas(mxid_a=None, mxid_b=None, ruta=None):
     (R_ab, t_ab, info) con  p_A = R_ab @ p_B + t_ab,  o None si no hay archivo o no
     corresponde a estas camaras. Si se abren en orden contrario al de la calibracion
     (A<->B) se invierte la transformacion."""
+    global motivo_sin_extrinsecas
     ruta = ruta_extrinsecas(ruta)
+    motivo_sin_extrinsecas = None
     if not os.path.exists(ruta):
+        motivo_sin_extrinsecas = f"no existe {os.path.basename(ruta)}"
         print(f"[fusion] No existe {os.path.basename(ruta)}: la camara B solo entrara en la fusion "
               f"cuando se autocalibre sola (lento y poco preciso). Ejecuta  python calibrar_extrinseca.py")
         return None
@@ -983,10 +1008,12 @@ def cargar_extrinsecas(mxid_a=None, mxid_b=None, ruta=None):
             print("[fusion] Camaras abiertas en orden inverso al de la calibracion: se invierte la transformacion")
             R, t = R.T, -R.T @ t
         else:
+            motivo_sin_extrinsecas = f"{os.path.basename(ruta)} es de otras camaras"
             print(f"[fusion] Las camaras abiertas ({mxid_a} / {mxid_b}) NO coinciden con las de "
                   f"{os.path.basename(ruta)} ({fa} / {fb}): se ignora. Recalibra con calibrar_extrinseca.py")
             return None
     if abs(np.linalg.det(R) - 1.0) > 1e-3 or np.linalg.norm(R @ R.T - np.eye(3)) > 1e-3:
+        motivo_sin_extrinsecas = f"{os.path.basename(ruta)} no es valido"
         print(f"[fusion] {os.path.basename(ruta)}: R_ab no es una rotacion valida, se ignora")
         return None
     return R, t, d
@@ -1013,6 +1040,7 @@ class FusionCamaras:
         self.t_valida = [i == 0 for i in range(N)]   # posicion conocida (A = origen al arrancar)
         self.R_F = R_CAM_DEFECTO.copy()
         self.R = [np.eye(3) for _ in range(N)]
+        self._cache_manos = None                     # (clave, manos fundidas) del ultimo fotograma
         self._actualizar_R()
         self.calibrada_c = False
         self._inclinacion_hecha = False
@@ -1051,6 +1079,8 @@ class FusionCamaras:
         self._previo, self._t_previo = {}, -1e9
         self._avisos = {}
         self._t_excluida = [None] * N             # desde cuando la excluye su IMU
+        self._verificar_t = [None] * N            # desplazamiento (IMU) por comprobar con medidas: desde cuando
+        self._t_pre = [None] * N                  # posicion segun el cuerpo justo antes de ese aviso
         self._ultimos = [None] * N                # ultimo resultado de cada camara (diagnostico)
 
     # ------------------------------------------------------------ estado
@@ -1073,6 +1103,7 @@ class FusionCamaras:
 
     def _actualizar_R(self):
         self.R = [self.R_F.T @ Ro for Ro in self.R_op]
+        self._cache_manos = None
 
     def _aviso(self, texto, duracion=DURACION_AVISO):
         print(f"[fusion] {texto}")
@@ -1337,19 +1368,39 @@ class FusionCamaras:
 
     def _camara_movida(self, i, motivo, rotacion=True):
         """La camara i se ha movido. Si solo se ha desplazado (sin girar), su rotacion
-        sigue valiendo y solo hay que volver a situarla."""
+        sigue valiendo y solo hay que volver a situarla.
+
+        (demo oct-2026) Un desplazamiento SIN giro solo lo dice el acelerometro integrado
+        dos veces, que con vibraciones da "desplazada 5-8 cm" sin que nadie la toque (se vio
+        en la demo, y con eso se tiraba la calibracion ChArUco). Si la camara estaba situada
+        y hay otra con la que compararla, sigue en uso y se COMPRUEBA con las medidas del
+        cuerpo (_resolver_t): solo si su posicion ya no cuadra se resitua."""
         letra = ETIQUETAS[i]
         N = len(self.hilos)
+        otras_t = [j for j in range(N) if j != i and self.valida[j] and self.t_valida[j]
+                   and not self._moviendose(j)]
+        if not rotacion and self.valida[i] and self.t_valida[i] and otras_t:
+            # posicion segun el CUERPO justo antes del aviso: se compara con la de despues
+            # (las dos con el mismo sesgo del modelo de piel, que asi se cancela)
+            r_pre = self.solvers_t[i].resolver(self.R_op[i], self.t[i]) if len(self.solvers_t[i]) else None
+            self._t_pre[i] = r_pre["t"] if (r_pre is not None and r_pre["ok"]) else None
+            self._verificar_t[i] = self.reloj()
+            self.solvers_t[i].vaciar()           # solo cuentan las medidas de despues
+            self.info_t[i] = None
+            mov = getattr(self.imus[i], "ultimo_mov", None) or {}
+            cm = f" ~{mov['despl'] * 100:.0f} cm" if mov.get("despl") is not None else ""
+            self._aviso(f"Camara {letra}: su IMU dice que se ha desplazado{cm}; sigue en uso y "
+                        f"lo compruebo con tus medidas")
+            return
         if any(self._fija):
             self._aviso("Se ha movido una camara: la calibracion ChArUco ya no vale (vuelvo a la automatica). "
                         "Cuando puedas: python calibrar_extrinseca.py", 10.0)
         self._fija = [False] * N
         self.solvers_t[i].vaciar()
         self.info_t[i] = None
+        self._verificar_t[i] = None
         self._hist_p[i] = {}
         self._t_uso[i] = None
-        otras_t = [j for j in range(N) if j != i and self.valida[j] and self.t_valida[j]
-                   and not self._moviendose(j)]
         if not rotacion:
             if otras_t:
                 self.t_valida[i] = False
@@ -1518,6 +1569,10 @@ class FusionCamaras:
             if r is None:
                 continue
             letra = ETIQUETAS[k]
+            if r.get("imu_incoherente") is not None and r["ok"] and self.imu_ok[k]:
+                self.imu_ok[k] = False
+                self._aviso(f"IMU de la camara {letra}: su gravedad no cuadra con tus brazos "
+                            f"({r['imu_incoherente']:.0f} deg); se calibra sin ella (python camaras.py --imu)", 10.0)
             if not self.valida[k]:
                 if r["ok"]:
                     self.R_op[k], self.valida[k] = r["R"], True
@@ -1598,6 +1653,29 @@ class FusionCamaras:
                     d = float(np.linalg.norm(self.t[k] - self.t[ancla_t]))
                     self._aviso(f"Camara {letra} situada: a {d:.2f} m de {ETIQUETAS[ancla_t]} "
                                 f"({r['n']} muestras, error estimado {r['error'] * 100:.1f} cm)")
+                continue
+            if self._verificar_t[k] is not None:
+                # la IMU dijo "desplazada": el solver solo tiene medidas de despues
+                if not r["ok"]:
+                    if ahora - self._verificar_t[k] > T_VERIFICAR_MAX:
+                        self._verificar_t[k] = None
+                        self._aviso(f"Camara {letra}: no he podido comprobar si se ha desplazado "
+                                    "(ponte delante de las dos camaras)")
+                    continue
+                ref = self._t_pre[k] if self._t_pre[k] is not None else self.t[k]
+                umbral = DESPL_CONFIRMADO if self._t_pre[k] is not None else DESPL_CONFIRMADO_SIN_REF
+                delta = r["t"] - ref
+                d = float(np.linalg.norm(delta))
+                self._verificar_t[k] = None
+                if d > max(umbral, 3.0 * r["error"]):
+                    # se corrige SOLO el desplazamiento medido: la rotacion ChArUco sigue valiendo
+                    # (no ha girado) y la posicion del cuerpo tiene su propio sesgo de unos cm
+                    self.t[k] = self.t[k] + delta
+                    self._kalman = {}
+                    self._aviso(f"Camara {letra}: confirmado, se ha desplazado {d * 100:.0f} cm; "
+                                "resituada con tus medidas (cuando puedas: python calibrar_extrinseca.py)", 10.0)
+                else:
+                    self._aviso(f"Camara {letra}: sigue en su sitio ({d * 100:.1f} cm); falsa alarma de la IMU")
                 continue
             med, cnt = s.residuos_recientes(self.R_op[k], self.t[k], ahora - VENTANA_RECIENTE)
             if cnt >= MIN_PARES_MOVIDA and med > max(RES_T_MOVIDA, 2.5 * r["mediana"]):
@@ -1732,11 +1810,19 @@ class FusionCamaras:
             self._previo = {**previo, **brazos}
             self._t_previo = ahora
 
-        aperturas = {}
-        for lado in ("L", "R"):
-            cand = [(i, snaps[i]["aperturas"][lado]) for i in usar if lado in snaps[i]["aperturas"]]
-            if cand:
-                aperturas[lado] = self._fundir_mano(lado, cand, snaps, ahora)
+        # Las manos solo dependen de los fotogramas (no del instante): mientras no llegue uno
+        # nuevo se reutiliza el resultado. Antes se volvian a triangular las dos manos en cada
+        # ciclo del robot (60 Hz con camaras a 30): ~40 % del tiempo de la fusion.
+        clave_manos = (self.n, tuple(cruzar), tuple(usar))
+        if self._cache_manos is not None and self._cache_manos[0] == clave_manos:
+            aperturas = self._cache_manos[1]
+        else:
+            aperturas = {}
+            for lado in ("L", "R"):
+                cand = [(i, snaps[i]["aperturas"][lado]) for i in usar if lado in snaps[i]["aperturas"]]
+                if cand:
+                    aperturas[lado] = self._fundir_mano(lado, cand, snaps, ahora)
+            self._cache_manos = (clave_manos, aperturas)
 
         res = dict(snaps[base])
         res["n"] = self.n

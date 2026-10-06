@@ -3,7 +3,8 @@ Grabar y reproducir sesiones de teleoperacion SIN camaras.
 
   python teleop_tron2.py --camara2 --orca --grabar sesion.pkl
       guarda, por camara y fotograma, TODO lo que sale de MediaPipe (esqueleto 2D, puntos 3D
-      con profundidad, direcciones, manos con sus 21 pixeles y world landmarks, K, IMU) mas
+      con profundidad, direcciones, manos con sus 21 pixeles y world landmarks, K, IMU: gravedad y
+      movimientos detectados) mas
       los eventos del teleop (calibracion con [c], pausas). Sin imagenes: ~30 KB/s por camara.
       Con --grabar-video se guardan tambien los fotogramas en JPEG (~1 MB/s por camara).
 
@@ -41,7 +42,7 @@ def _landmarks_a_array(lms):
 
 def _ligero(resultado, con_video=False, calidad_jpeg=80):
     """Copia serializable y ligera de un resultado de HiloSeguimiento."""
-    r = {k: resultado[k] for k in ("n", "t", "t_proc", "brazos", "puntos", "lm2d", "linea_hombros")
+    r = {k: resultado[k] for k in ("n", "t", "t_proc", "brazos", "puntos", "lm2d", "linea_hombros", "imu_estado")
          if k in resultado}
     r["K"] = None if resultado.get("K") is None else np.asarray(resultado["K"], dtype=np.float64)
     r["arriba"] = None if resultado.get("arriba") is None else np.asarray(resultado["arriba"], dtype=np.float64)
@@ -97,7 +98,9 @@ def cargar(ruta):
 
 
 class _ImuReproducida:
-    """IMU de mentira: da el 'arriba' grabado y nunca se mueve."""
+    """IMU de mentira: da el 'arriba' grabado y, si la grabacion lo tiene (desde oct-2026),
+    los movimientos que detecto la IMU de verdad (para ver en la reproduccion si una
+    vibracion saco una camara de la fusion). Las grabaciones antiguas: nunca se mueve."""
 
     def __init__(self):
         self.R = np.eye(3)
@@ -105,18 +108,31 @@ class _ImuReproducida:
         self.movimientos = 0
         self.ultimo_mov = None
         self._listo = True
+        self._mov0 = None            # contador de movimientos del primer registro (se cuenta desde ahi)
+        self._girando = self._despl = self._en_mov = False
+
+    def reproducir(self, estado):
+        if not estado:
+            return
+        if self._mov0 is None:
+            self._mov0 = estado.get("mov", 0)
+        self.movimientos = estado.get("mov", 0) - self._mov0
+        self.ultimo_mov = estado.get("ultimo")
+        self._girando = bool(estado.get("girando"))
+        self._despl = bool(estado.get("despl"))
+        self._en_mov = bool(estado.get("en_mov"))
 
     def arriba(self):
         return None if self._arriba is None else self._arriba.copy()
 
     def girando(self):
-        return False
+        return self._girando
 
     def desplazandose(self):
-        return False
+        return self._despl
 
     def en_movimiento(self):
-        return False
+        return self._en_mov
 
 
 class _CamaraReproducida:
@@ -191,6 +207,7 @@ class HiloReproduccion:
         s["depth"] = None
         if self.camara.imu is not None:
             self.camara.imu._arriba = r.get("arriba")
+            self.camara.imu.reproducir(r.get("imu_estado"))
         return s
 
     def ultimo(self):

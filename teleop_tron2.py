@@ -53,23 +53,35 @@ import numpy as np
 import escenario_tuberias
 import grabacion
 import mano_orca
+import fusion as fusion_mod
 from fusion import CalibracionCamaras, FusionCamaras, cargar_extrinsecas
+from requisitos import Requisitos
 from robot_tron2 import RobotTron2, ortonormalizar
 from seguimiento_brazos import COLOR_LADO, PUNTOS, VIS_MIN, LONGITUDES, dibujar_esqueleto
-from suavizado import ObjetivoSuave, RotacionSuave, comprimir_alcance
+from suavizado import ObjetivoSuave, RotacionSuave
 
 VENTANA = "Seguimiento OAK-D"
 VENTANA2 = "Seguimiento OAK-D (camara 2)"
 
 FREC_CONTROL = 60.0        # Hz del bucle del robot
 # Suavizado CONTINUO de objetivos (suavizado.py): muelle criticamente amortiguado entre fotos.
-# Constante de tiempo ~ 2/omega: 14 -> ~0.14 s (mas alto = mas rapido pero menos suave).
-OMEGA_OBJETIVO = 14.0
+# Constante de tiempo ~ 2/omega: 18 -> ~0.11 s (mas alto = mas rapido pero menos suave).
+# (oct-2026) 14 -> 18: con el operador moviendose el muelle se quedaba 2.5-4 grados por detras;
+# en simulacion: antebrazo 5.4 -> 5.0 grados de mediana, p95 del escenario de la demo 23 -> 19,
+# temblor (aceleracion articular RMS) +8 %. (Probado tambien darle al muelle la velocidad del
+# objetivo sacada de las fotos: cuadruplicaba el temblor.)
+OMEGA_OBJETIVO = 18.0
 OMEGA_ORIENT = 12.0        # idem para la orientacion de la palma
 SALTO_ORIENT = np.radians(60)   # un salto mayor del marco de la mano entre dos fotos se ignora
                                 # (salvo que se repita 3 veces: entonces es real)
 ZONA_MUERTA_OBJ = 0.004    # m: el objetivo no se mueve por temblores menores que esto
-ALCANCE_SUAVE, ALCANCE_MAX = 0.92, 0.97   # fraccion del alcance del brazo donde empieza a comprimirse
+# Brazo casi estirado = singularidad de la IK. Antes se acercaba la MUNECA al hombro (92-97 %
+# del alcance) sin tocar el codo: con las proporciones del TRON 2 eso empezaba ya con 47 grados
+# de codo, un brazo humano recto (10 grados) salia con 30 en el robot y los objetivos de codo y
+# muneca quedaban incoherentes (6 cm de error de codo, 17 grados de antebrazo). Ahora se impone
+# una flexion MINIMA del codo, suave, en el plano en que dobla el operador: codo y muneca
+# siguen siendo un brazo valido y por encima de 2*FLEX_MIN_ROBOT no cambia nada.
+FLEX_MIN_ROBOT = 8.0       # grados
 SALTO_LOG = 0.10           # m: si el objetivo de la muneca salta mas que esto entre dos fotos, se anota
 CADUCIDAD = 0.5            # s: si no hay datos nuevos en este tiempo, el robot se queda quieto
 W_CODO = 0.8               # peso del objetivo del codo frente al de la muneca (antes 0.6)
@@ -105,6 +117,25 @@ def enderezar(d_b, d_a):
     return (np.sin(theta - theta_n) * d_b + np.sin(theta_n) * d_a) / s
 
 
+def flexion_minima(d_b, d_a, minimo_deg=FLEX_MIN_ROBOT):
+    """Antebrazo con al menos 'minimo' grados de codo (marco del robot: x delante, z arriba).
+    Suave y de pendiente continua: phi -> minimo + phi^2 / (4 minimo) hasta 2*minimo; por
+    encima, igual. Dobla en el plano en que ya dobla el operador; con el brazo del todo recto,
+    hacia delante/arriba (como dobla un codo humano)."""
+    minimo = np.radians(minimo_deg)
+    phi = float(np.arccos(np.clip(np.dot(d_b, d_a), -1.0, 1.0)))
+    if phi >= 2 * minimo:
+        return d_a
+    phi_n = minimo + phi * phi / (4 * minimo)
+    perp = d_a - d_b * np.dot(d_a, d_b)
+    if np.linalg.norm(perp) < 1e-3:
+        perp = np.array([1.0, 0.0, 1.0]) - d_b * np.dot([1.0, 0.0, 1.0], d_b)
+        if np.linalg.norm(perp) < 1e-3:
+            perp = np.array([1.0, 0.0, 0.0]) - d_b * d_b[0]
+    perp = perp / np.linalg.norm(perp)
+    return np.cos(phi_n) * d_b + np.sin(phi_n) * perp
+
+
 def objetivos(robot, lado_robot, datos, R_cam, espejo):
     """Direcciones del operador -> posiciones objetivo del codo y la muneca del robot."""
     brazo = robot.brazos[lado_robot]
@@ -113,11 +144,10 @@ def objetivos(robot, lado_robot, datos, R_cam, espejo):
     if espejo:
         d_b = ESPEJO_M @ d_b
         d_a = ESPEJO_M @ d_a
+    # brazo casi estirado = singularidad de la IK: codo minimamente doblado (codo y muneca coherentes)
+    d_a_robot = flexion_minima(d_b, d_a)
     codo = brazo.hombro + brazo.L_brazo * d_b
-    muneca = codo + brazo.L_antebrazo * d_a
-    # brazo casi estirado = singularidad de la IK: se acorta un poco (suave, sin escalones)
-    muneca = comprimir_alcance(brazo.hombro, muneca, brazo.L_brazo + brazo.L_antebrazo,
-                               ALCANCE_SUAVE, ALCANCE_MAX)
+    muneca = codo + brazo.L_antebrazo * d_a_robot
     return codo, muneca, d_b, d_a
 
 
@@ -180,6 +210,19 @@ def texto(img, s, org, color=(255, 255, 255), escala=0.5):
     x, y = org
     cv2.rectangle(img, (x - 3, y - th - 4), (x + tw + 3, y + base + 1), (0, 0, 0), -1)
     cv2.putText(img, s, (x, y), cv2.FONT_HERSHEY_SIMPLEX, escala, color, 1, cv2.LINE_AA)
+
+
+def partir(s, ancho_px, escala=0.5):
+    """Parte un texto en lineas que quepan en ancho_px (por palabras)."""
+    lineas, actual = [], ""
+    for palabra in s.split(" "):
+        prueba = (actual + " " + palabra).strip()
+        if actual and cv2.getTextSize(prueba, cv2.FONT_HERSHEY_SIMPLEX, escala, 1)[0][0] > ancho_px:
+            lineas.append(actual)
+            actual = "   " + palabra
+        else:
+            actual = prueba if not actual.startswith("   ") else actual + " " + palabra
+    return lineas + ([actual] if actual else [])
 
 
 def colorear_profundidad(depth):
@@ -262,9 +305,12 @@ def componer_vista(snap, estado):
         lineas.append(estado["mensaje"])
     for k, s in enumerate(lineas):
         texto(img, s, (10, 22 + 22 * k))
-    for k, (lado, motivo) in enumerate(sorted(estado.get("congelado", {}).items())):
-        texto(img, f"Robot {'IZQ' if lado == 'L' else 'DER'} QUIETO: {motivo}",
-              (10, 22 + 22 * (len(lineas) + k)), (0, 0, 255))
+    rojas = [f"Robot {'IZQ' if lado == 'L' else 'DER'} QUIETO: {motivo}"
+             for lado, motivo in sorted(estado.get("congelado", {}).items())]
+    for r in estado.get("requisitos", []):
+        rojas += partir(f"! {r}", w - 20)
+    for k, s in enumerate(rojas):
+        texto(img, s, (10, 22 + 22 * (len(lineas) + k)), (0, 0, 255))
     texto(img, "q salir | p pausa | c calibrar | r reposo | m espejo | g dedos | v vista | 1 tuberias",
           (10, h - 12), escala=0.42)
     return img
@@ -328,7 +374,7 @@ class Teleoperador:
     metricas_imitacion.py (sin visor, a toda velocidad, con reloj simulado)."""
 
     def __init__(self, robot, fusion, escena, hilos, girar=True, grabadora=None, metricas=None,
-                 reloj=time.monotonic, log_csv=None, eventos=None):
+                 reloj=time.monotonic, log_csv=None, eventos=None, motivo_sin_extrinsecas=None):
         self.robot, self.fusion, self.escena, self.hilos = robot, fusion, escena, hilos
         self.girar, self.grabadora, self.metricas, self.reloj = girar, grabadora, metricas, reloj
         self.R_cam = fusion.R_cam
@@ -346,6 +392,10 @@ class Teleoperador:
         self.eventos = sorted(eventos or [], key=lambda e: e[0])   # reproduccion: (t, nombre, datos)
         self.gancho = None
         self.t_log0 = reloj()
+        # condiciones de arranque/uso que se dicen en pantalla (requisitos.py)
+        self.requisitos = Requisitos(hilos, fusion, reloj=reloj, extrinsecas=any(fusion._fija),
+                                     motivo_extrinsecas=motivo_sin_extrinsecas)
+        self.t_resumen = reloj() + 8.0
         self._f_csv = open(log_csv, "w", newline="", encoding="utf-8") if log_csv else None
         self._w_csv = csv.writer(self._f_csv) if self._f_csv else None
         if self._w_csv:
@@ -366,9 +416,11 @@ class Teleoperador:
                 res = [(None if R is None else np.asarray(R), n, disp, mot, ang)
                        for R, n, disp, mot, ang in d["resultado"]]
                 self.estado["mensaje"] = aplicar_calibracion(res, self.fusion, self.estado)
+                self.ult_obj.clear()
                 self.t_mensaje = t0 + 4.0
             elif nombre == "pausa":
                 self.estado["pausado"] = bool(d["pausado"])
+                self.ult_obj.clear()
             elif nombre == "espejo":
                 self.estado["espejo"] = bool(d["espejo"])
                 self._reiniciar_objetivos()
@@ -399,6 +451,7 @@ class Teleoperador:
             return True
         if tecla == ord("p"):
             self.estado["pausado"] = not self.estado["pausado"]
+            self.ult_obj.clear()     # el registro de saltos no compara con antes de la pausa
             self._evento("pausa", pausado=self.estado["pausado"])
         elif tecla == ord("m"):
             self.estado["espejo"] = not self.estado["espejo"]
@@ -433,6 +486,7 @@ class Teleoperador:
             if self.calib.terminada():
                 res = self.calib.resultado()
                 estado["mensaje"] = aplicar_calibracion(res, fusion, estado)
+                self.ult_obj.clear()     # marco nuevo: no es un salto
                 self._evento("calibracion", resultado=[(None if R is None else np.asarray(R).tolist(), n, disp, mot, ang)
                                                        for R, n, disp, mot, ang in res])
                 self.t_mensaje = t0 + 6.0
@@ -554,6 +608,10 @@ class Teleoperador:
             escena.actualizar(robot, estado["pinzas"], dt)
             robot.actualizar()
         estado["fps_control"] = 0.95 * estado["fps_control"] + 0.05 / max(dt, 1e-3)
+        estado["requisitos"] = self.requisitos.actualizar(estado["fps_control"])
+        if self.t_resumen is not None and t0 > self.t_resumen:
+            self.t_resumen = None
+            print(self.requisitos.resumen())
         if t0 > self.t_mensaje:
             estado["mensaje"] = ""
         if self.gancho is not None:       # pruebas: comparar con una verdad conocida
@@ -630,8 +688,11 @@ def preparar_reproduccion(ruta, xml, orca, velocidad=1.0, metricas=None, sin_ext
     fusion = FusionCamaras(hilos, reloj=reloj, extrinsecas=extr)
     print(f"[reproduccion] {ruta}: {len(hilos)} camara(s), {len(eventos)} eventos"
           + (", extrinsecas ChArUco" if extr is not None else ""))
+    motivo = None
+    if len(hilos) > 1 and extr is None:
+        motivo = "--sin-extrinsecas" if sin_extrinsecas else "la grabacion no las tiene"
     return Teleoperador(robot, fusion, escena, hilos, girar=True, metricas=metricas, reloj=reloj, eventos=eventos,
-                        log_csv=log_csv)
+                        log_csv=log_csv, motivo_sin_extrinsecas=motivo)
 
 
 def main():
@@ -703,8 +764,11 @@ def main():
             if extr is not None and grabadora is not None:
                 grabadora.meta["extrinsecas"] = (np.asarray(extr[0]).tolist(), np.asarray(extr[1]).tolist())
         fusion = FusionCamaras(hilos, extrinsecas=None if extr is None else (extr[0], extr[1]))
+        motivo = None
+        if args.camara2 and extr is None:
+            motivo = "--sin-extrinsecas" if args.sin_extrinsecas else fusion_mod.motivo_sin_extrinsecas
         tele = Teleoperador(robot, fusion, escena, hilos, girar=not (args.sin_manos or args.sin_giro),
-                            grabadora=grabadora, log_csv=args.log_csv)
+                            grabadora=grabadora, log_csv=args.log_csv, motivo_sin_extrinsecas=motivo)
 
     robot, escena, estado = tele.robot, tele.escena, tele.estado
     perfil, t_perfil = {}, time.monotonic()

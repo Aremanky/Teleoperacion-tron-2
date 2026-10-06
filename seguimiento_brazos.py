@@ -28,6 +28,11 @@ CAMBIOS (oct-2026, imitacion):
     imposible (codo inventado por MediaPipe). La fusion 3D lo usa para no creerse
     un codo falso con la confianza de uno bien visto.
   - El hilo pasa a las manos el fotograma HD, la profundidad y la 'z' de las munecas.
+  - (demo oct-2026) Un punto FUERA DE LA IMAGEN no se ha visto: MediaPipe lo sigue dando
+    (extrapolado, con visibilidad 0.5-0.9) pero es inventado, y ahi no hay profundidad.
+    Con la camara A cortando la cabeza y las manos levantadas, el robot copiaba esas munecas
+    inventadas. Ahora cuentan como no vistas (vis_en_cuadro): esa camara no da ese brazo y
+    lo pone la otra camara, o el robot se queda quieto avisando "no se ve tu brazo".
 """
 import os
 import threading
@@ -58,6 +63,7 @@ REF_PUNTO = {13: 11, 15: 11, 14: 12, 16: 12}    # codo/muneca: su profundidad se
 OTRO_HOMBRO = {11: 12, 12: 11}
 CADERA_DE = {11: 23, 12: 24}
 RANGO_HOMBROS = (0.22, 0.55)      # m, distancia plausible entre los dos hombros
+MARGEN_CUADRO = 0.01              # fraccion del ancho/alto: mas alla del borde un punto no se ha visto
 TOL_Z = 0.20                      # m: OAK-D y MediaPipe "cuadran" por debajo de esto
 TOL_LONGITUD = 0.30               # fraccion: un hueso puede desviarse esto de la longitud aprendida
 HOMBRO_HACIA_TORSO = 0.40         # el hombro se mide a esta fraccion del camino hacia el otro hombro
@@ -92,6 +98,15 @@ class FiltroOneEuro:
         self.x = a * x + (1 - a) * self.x
         self.t = t
         return self.x.copy()
+
+
+def vis_en_cuadro(vis, uv, w, h, margen=MARGEN_CUADRO):
+    """Visibilidad de un landmark teniendo en cuenta si cae DENTRO de la imagen (uv en px).
+    Fuera de la imagen MediaPipe extrapola: el punto es inventado aunque diga que lo ve."""
+    u, v = uv
+    if -margen * w <= u <= (1 + margen) * w and -margen * h <= v <= (1 + margen) * h:
+        return vis
+    return 0.0
 
 
 def unitario(v):
@@ -215,7 +230,7 @@ class SeguidorBrazos:
         mundo = res.pose_world_landmarks[0] if res.pose_world_landmarks else None
 
         def vis(p):
-            return 1.0 if p.visibility is None else p.visibility
+            return vis_en_cuadro(1.0 if p.visibility is None else p.visibility, (p.x * w, p.y * h), w, h)
 
         self.lm2d = [(p.x * w, p.y * h, vis(p)) for p in lm]
         con_prof = self.usar_profundidad and depth is not None and K is not None
@@ -308,7 +323,7 @@ class SeguidorBrazos:
         for i in PUNTOS_3D:
             p = lm[i]
             uv[i] = (p.x * w, p.y * h)
-            vis[i] = 1.0 if p.visibility is None else p.visibility
+            vis[i] = vis_en_cuadro(1.0 if p.visibility is None else p.visibility, uv[i], w, h)
             out[i] = {"uv": uv[i], "vis": vis[i], "z": None, "fuente": None, "calidad": 1.0}
         if depth is None or K is None:
             return out
@@ -533,7 +548,10 @@ class HiloSeguimiento(threading.Thread):
                                  aperturas=aperturas, manos=dibujo_manos,
                                  lm2d=self.seguidor.lm2d,
                                  linea_hombros=self.seguidor.linea_hombros,
-                                 arriba=None if imu is None else imu.arriba())
+                                 arriba=None if imu is None else imu.arriba(),
+                                 imu_estado=None if imu is None else dict(
+                                     mov=imu.movimientos, ultimo=imu.ultimo_mov, girando=imu.girando(),
+                                     despl=imu.desplazandose(), en_mov=imu.en_movimiento()))
                 with self._lock:
                     self._ultimo = resultado
                 if self.grabadora is not None:

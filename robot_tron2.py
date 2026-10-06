@@ -90,6 +90,10 @@ CANCELA_TRANSICION = 0.10  # m: si el objetivo se mueve esto durante la transici
 # del marco semantico es el DORSO, que tambien apunta a +y. Asi el reposo de la pinza
 # coincide con el del operador y la muneca no arranca pegada a un limite.
 NORMAL_PINZA_REPOSO = np.array([0.0, 1.0, 0.0])
+# Postura de reposo VISUAL (arranque y tecla r): codo flexionado como en un curl de biceps.
+# Solo estetica: la calibracion [c] sigue siendo con el operador con los brazos colgando, y la
+# IK sigue usando q_reposo (brazo recto) para el espacio nulo y los rescates. 0 = como antes.
+CODO_REPOSO_DEG = 90.0
 
 
 def nombre(m, tipo, i):
@@ -181,8 +185,8 @@ class Brazo:
         self._preparar_pinza()
         self._preparar_agarre()
 
-        # --- Geometria del brazo, medida en la postura de reposo ---
-        self.reposo()
+        # --- Geometria del brazo, medida en la postura de reposo (brazo recto) ---
+        self.reposo(self.q_reposo) 
         mujoco.mj_kinematics(m, d)
         mujoco.mj_comPos(m, d)
 
@@ -224,6 +228,29 @@ class Brazo:
         self.q_transicion = None
         self.t_atascado, self.t_rescate = 0.0, -1e9
         self.rng = np.random.default_rng(0)
+                # postura visual de reposo (curl) y el brazo se queda en ella al arrancar
+        self.q_reposo_visual = self._postura_visual()
+        self.reposo()
+
+    def _postura_visual(self):
+        """q_reposo con el codo doblado CODO_REPOSO_DEG. El signo se elige solo: el que lleva
+        la muneca mas hacia delante del torso (asi no depende del convenio del URDF)."""
+        q = self.q_reposo.copy()
+        if not CODO_REPOSO_DEG:
+            return q
+        i_c = self.juntas.index(self.j_codo)
+        delante = self.d.xmat[self.raiz].reshape(3, 3)[:, 0]
+        mejor, mejor_x = q, -np.inf
+        for signo in (1.0, -1.0):
+            p = q.copy()
+            p[i_c] += signo * np.radians(CODO_REPOSO_DEG)
+            p = self._limitar(p)
+            self._fijar(p)
+            x = float(np.dot(self.puntos()[1] - self.hombro, delante))
+            if x > mejor_x:
+                mejor, mejor_x = p, x
+        self._fijar(self.q_reposo)
+        return mejor
 
     # ---------------- deteccion de la cadena ----------------
     def _buscar_ef(self):
@@ -324,8 +351,8 @@ class Brazo:
         """Posicion actual (mundo) del codo y del centro de la muneca."""
         return self._a_mundo(self.b_codo, self.loc_codo), self._a_mundo(self.b_muneca, self.loc_muneca)
 
-    def reposo(self):
-        self.d.qpos[self.qadr] = self.q_reposo
+    def reposo(self, q=None):
+        self.d.qpos[self.qadr] = self.q_reposo_visual if q is None else q
         if getattr(self, "mano", None) is not None:
             self.mano.reposo()
         self.R_obj_ult = None
