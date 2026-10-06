@@ -27,10 +27,32 @@ CAMBIOS (oct-2026, imitacion):
     de la mano, y mover_muneca() ha desaparecido.
   - Sin mano a la vista se mantiene la ULTIMA orientacion objetivo (no se vuelve al reposo).
   - El rescate de posturas incluye la muneca.
+
+CAMBIOS (oct-2026, movimiento natural):
+  1. Limites ANATOMICOS del hombro (LIMITES_ANATOMICOS). Los rangos humanos se ponian como
+     limites de cada junta, y eso solo es cierto con el brazo colgando: el hombro son 3
+     bisagras en cadena (angulos de Euler) y con el brazo abducido 90 grados la junta de
+     "flexion" hace abduccion HORIZONTAL. Ahora se mide la postura del humero respecto al
+     torso (swing-twist) y se limita eso: un cono irregular de elevacion segun el plano en
+     que se levanta el brazo y una rotacion humeral que se acopla con la elevacion. Es una
+     tarea BLANDA de la IK que solo actua al pasarse; tambien la respetan los rescates.
+  2. Limites BLANDOS en las juntas (minima norma ponderada, Chan & Dubey 1995): una junta
+     cuesta mas de mover cuanto mas cerca esta de su limite y se esta acercando a el, asi
+     que la IK reparte el movimiento ANTES de chocar en vez de bloquearla de golpe (el
+     bloqueo duro se queda como red de seguridad).
+  3. Giro del codo natural: cuando el objetivo del codo pierde peso (brazo casi recto), el
+     espacio nulo prefiere el codo hacia ABAJO y algo hacia FUERA, como cuelga un codo humano,
+     en vez de lo que dijera q_reposo.
+  4. Atascos: el detector comparaba el error con el del ciclo anterior y cualquier temblor del
+     objetivo lo reiniciaba (a 60 Hz, con 4 mm de ruido, no saltaba nunca). Ahora mira los
+     ultimos T_ATASCO s (DetectorAtasco). Y el rescate se compara con la postura actual usando la
+     MISMA medida (posicion + limite anatomico); antes se comparaba una medida con penalizacion
+     anatomica contra otra sin ella y se podian rechazar rescates buenos.
 """
 import os
 import time
 import xml.etree.ElementTree as ET
+from collections import deque
 
 import mujoco
 import numpy as np
@@ -82,6 +104,8 @@ MARGEN_LIMITE = 0.1    # rad: junto a un limite se empuja la articulacion hacia 
 ERROR_ATASCO = 0.10    # m: error a partir del cual se considera que el brazo esta atascado
 T_ATASCO = 0.5         # s: tiempo atascado antes de buscar otra solucion
 MEJORA_MIN = 0.05      # m/s: si el error baja mas rapido que esto, el brazo NO esta atascado
+                       # (oct-2026: medido sobre los ultimos T_ATASCO s, no foto a foto; ver DetectorAtasco)
+MEJORA_RESCATE = 0.05  # m: un rescate tambien se acepta si mejora al menos esto (ademas de si divide el error a la mitad)
 T_TRANSICION_MAX = 2.0 # s: una transicion de rescate nunca dura mas que esto
 CANCELA_TRANSICION = 0.10  # m: si el objetivo se mueve esto durante la transicion, se cancela
 # Pinza original (simetrica): su "normal de la palma" es el eje de cierre de las mordazas, y
@@ -106,6 +130,34 @@ FLEXION_CODO_DEG = (0.0, 160.0)
 #   abduccion: + = brazo hacia el lado,        - = aduccion (cruzar por delante del cuerpo)
 #   rotacion:  con el codo a 90, + = externa (antebrazo hacia fuera), - = interna
 HOMBRO_HUMANO_DEG = dict(flexion=(-60.0, 180.0), abduccion=(-30.0, 180.0), rotacion=(-70.0, 90.0))
+
+# --- (1) Limites ANATOMICOS del hombro --------------------------------------------------------
+# True: los rangos de HOMBRO_HUMANO_DEG se aplican a la postura REAL del humero (ver cabecera) y
+# las juntas del hombro solo conservan una caja amplia de seguridad. False: como antes (por junta).
+LIMITES_ANATOMICOS = True
+# Elevacion maxima del brazo (grados desde colgando) segun el PLANO en que se levanta:
+#   0 = hacia fuera (abduccion), 90 = hacia delante (flexion), -90 = hacia atras (extension),
+#   +-180 = hacia el otro lado (aduccion). Los puntos -90, 0, 90 y +-180 salen de
+#   HOMBRO_HUMANO_DEG; estos son los intermedios: abrir el brazo hacia atras a la altura del
+#   hombro (abduccion horizontal) y cruzarlo por delante del pecho (aduccion horizontal).
+CONO_HOMBRO_EXTRA_DEG = {-45.0: 100.0, 135.0: 125.0}
+# Acople rotacion-elevacion: con el brazo muy levantado se pierde rotacion INTERNA
+# (pares elevacion -> grados de rotacion interna que se pierden; se interpola entre ellos).
+ACOPLE_ROTACION_DEG = ((120.0, 0.0), (180.0, 50.0))
+# Caja de seguridad de las juntas del hombro: el rango humano por junta ampliado esto por cada lado
+# (evita que la IK salte a la otra solucion de Euler; nunca pasa de los limites del XML).
+HOLGURA_CAJA_HOMBRO_DEG = 45.0
+W_ANAT = 0.25          # m/rad: peso del limite anatomico (1 rad pasado "cuesta" como 25 cm)
+SUAVE_ANAT_DEG = 3.0   # transicion del limite anatomico: sin escalon al tocarlo
+
+# --- (2) Limites BLANDOS de las juntas --------------------------------------------------------
+# Cuanto mas "cara" de mover puede llegar a ser una junta pegada a su limite (1 = desactivado).
+PESO_LIMITE_MAX = 50.0
+
+# --- (3) Giro del codo sin objetivo de codo ---------------------------------------------------
+K_CODO_ABAJO = 0.03    # fuerza de la preferencia "codo hacia abajo" en el espacio nulo (0 = no)
+CODO_FUERA = 0.4       # cuanto hacia fuera, ademas de hacia abajo
+W_CODO_PLENO = 0.4     # con w_codo >= esto manda el objetivo del codo y la preferencia no actua
 # Bloquear la flexion/extension de la muneca (se queda en 0, la de reposo)
 BLOQUEAR_FLEXION_MUNECA = True
 # Bloquear la desviacion radial/ulnar de la muneca (se queda en 0, la de reposo)
@@ -168,6 +220,88 @@ def marco_semantico(f, a):
     a = a - f * np.dot(a, f)
     a /= np.linalg.norm(a)
     return np.column_stack([f, a, np.cross(f, a)])
+
+
+# ---------------- anatomia del hombro (funciones puras, sin MuJoCo) ----------------
+def angulos_hombro(R_torso, fuera, humero, Q, a0):
+    """Postura anatomica del humero respecto al torso, en grados: (elevacion, plano, giro).
+      R_torso: orientacion del torso en el mundo (x delante, y izquierda, z arriba)
+      fuera:   vector (coordenadas del torso) que apunta hacia fuera de este lado: +-y
+      humero:  direccion hombro -> codo en el mundo
+      Q:       rotacion del humero desde su postura de reposo, en coordenadas del torso
+      a0:      direccion del humero en reposo, en coordenadas del torso
+    elevacion: 0 = colgando, 90 = horizontal, 180 = vertical.
+    plano: 0 = hacia fuera, 90 = hacia delante, -90 = hacia atras, +-180 = hacia el otro lado.
+    giro: rotacion humeral desde el reposo (twist de la descomposicion swing-twist alrededor
+    del eje de reposo), en el convenio de las juntas: el signo anatomico lo pone quien llama."""
+    b = R_torso.T @ np.asarray(humero, float)
+    b = b / max(np.linalg.norm(b), 1e-12)
+    elev = float(np.degrees(np.arccos(np.clip(-b[2], -1.0, 1.0))))
+    plano = float(np.degrees(np.arctan2(b[0], float(np.dot(b, fuera)))))
+    giro = float(np.degrees(angulo_giro(Q, a0)))
+    return elev, plano, giro
+
+
+def tabla_cono(rangos, extra=CONO_HOMBRO_EXTRA_DEG):
+    """(planos, elevaciones maximas) del cono del hombro a partir de HOMBRO_HUMANO_DEG."""
+    ext, add = -rangos["flexion"][0], -rangos["abduccion"][0]
+    puntos = {-180.0: add, -90.0: ext, 0.0: rangos["abduccion"][1],
+              90.0: rangos["flexion"][1], 180.0: add}
+    puntos.update(extra or {})
+    planos = np.array(sorted(puntos))
+    return planos, np.array([puntos[p] for p in planos])
+
+
+def bisagra_suave(v, ancho):
+    """max(0, v) sin esquina: cuadratica en [0, ancho] y lineal (pendiente 1) despues.
+    Devuelve (valor, derivada)."""
+    v = np.asarray(v, float)
+    val = np.where(v <= 0, 0.0, np.where(v < ancho, v * v / (2 * ancho), v - ancho / 2))
+    der = np.where(v <= 0, 0.0, np.where(v < ancho, v / ancho, 1.0))
+    return val, der
+
+
+def pesos_limites(q, lo, hi, limitado, dH_ant, tope=PESO_LIMITE_MAX):
+    """Pesos de la minima norma ponderada (Chan & Dubey 1995): 1 + |dH/dq| con
+    H = sum (hi-lo)^2 / (4 (hi-q)(q-lo)), solo para las juntas que se ACERCAN a su limite
+    (|dH/dq| crece); las que se alejan pesan 1. Devuelve (pesos, |dH/dq| para el siguiente paso)."""
+    rango = hi - lo
+    ok = limitado & (rango > 1e-6)                    # las juntas bloqueadas (lo == hi) no cuentan
+    dH = np.zeros_like(q, dtype=float)
+    a, b = lo[ok], hi[ok]
+    x = np.clip(q[ok], a + 1e-6 * rango[ok], b - 1e-6 * rango[ok])
+    dH[ok] = np.abs(rango[ok] ** 2 * (2 * x - a - b) / (4 * (b - x) ** 2 * (x - a) ** 2))
+    pesos = np.where(dH >= dH_ant, 1.0 + dH, 1.0)
+    return np.minimum(pesos, tope), dH
+
+
+class DetectorAtasco:
+    """El brazo esta atascado si su error lleva T_ATASCO s por encima de ERROR_ATASCO y en ese
+    tiempo ha bajado menos de MEJORA_MIN * T_ATASCO.
+    (oct-2026) Antes se comparaba el error con el del ciclo ANTERIOR: un solo ciclo en que el
+    error bajara un poco (ruido del objetivo, que tiembla unos mm) ponia el contador a cero, y con
+    un objetivo vivo el rescate podia no llegar nunca (sesion de prueba: brazo izquierdo con 42 cm
+    de error durante segundos y los brazos del operador quietos)."""
+
+    def __init__(self, umbral=ERROR_ATASCO, ventana=T_ATASCO, mejora=MEJORA_MIN):
+        self.umbral, self.ventana, self.mejora = umbral, ventana, mejora
+        self.hist = deque()
+
+    def reiniciar(self):
+        self.hist.clear()
+
+    def actualizar(self, t, err):
+        """Anota el error del instante t. Devuelve True si el brazo esta atascado."""
+        if err <= self.umbral:
+            self.hist.clear()
+            return False
+        self.hist.append((t, err))
+        while len(self.hist) > 1 and t - self.hist[1][0] >= self.ventana:
+            self.hist.popleft()
+        t0, e0 = self.hist[0]
+        if t - t0 < self.ventana:
+            return False
+        return e0 - err < self.mejora * (t - t0)
 
 
 class Brazo:
@@ -243,7 +377,10 @@ class Brazo:
         self.err_ant, self.obj_rescate = 0.0, None
         self.q_transicion = None
         self.t_atascado, self.t_rescate = 0.0, -1e9
+        self.atasco = DetectorAtasco()
         self.rng = np.random.default_rng(0)
+        self.anat = None                       # limites anatomicos del hombro (_limitar_hombro)
+        self._dH_ant = np.zeros(len(juntas))   # limites blandos: |dH/dq| del paso anterior
         # postura visual de reposo (curl) y el brazo se queda en ella al arrancar
         if FLEXION_CODO_DEG is not None:
             self._limitar_codo(*FLEXION_CODO_DEG)
@@ -386,11 +523,96 @@ class Brazo:
         rot0 = np.degrees(np.arctan2(np.dot(p_m - p_c, fuera), np.dot(p_m - p_c, delante)))
         s_rot = self._signo(q90, i_rot, 1, fuera)
         self._fijar(self.q_reposo)
+        if LIMITES_ANATOMICOS:
+            if all(rangos.get(k) is not None for k in ("flexion", "abduccion", "rotacion")):
+                self._calibrar_anatomia(q, R, i_rot, s_rot, rot0, rangos)
+            else:
+                print(f"[aviso] hombro {self.lado}: LIMITES_ANATOMICOS necesita los tres rangos "
+                      f"de HOMBRO_HUMANO_DEG: sigo con limites por junta")
+        if self.anat is not None:   # las juntas solo conservan una caja amplia de seguridad
+            h = HOLGURA_CAJA_HOMBRO_DEG
+            rangos = {k: (v[0] - h, v[1] + h) for k, v in rangos.items() if v is not None}
         for i, s, a0, clave, papel in ((i_flex, s_flex, flex0, "flexion", "flexion"),
                                        (i_abd, s_abd, abd0, "abduccion", "abduccion"),
                                        (i_rot, s_rot, rot0, "rotacion", "rotacion")):
             if rangos.get(clave) is not None:
                 self._poner_rango(i, q[i], s, a0, *rangos[clave], papel)
+
+    # ---------------- limites anatomicos del hombro ----------------
+    def _calibrar_anatomia(self, q, R, i_rot, s_rot, rot0, rangos):
+        """Prepara la medida anatomica del humero. q: postura de reposo (brazo colgando), donde
+        la rotacion humeral vale rot0 (grados, medida por _limitar_hombro con el codo a 90).
+        s_rot: sentido de la junta i_rot que es rotacion EXTERNA."""
+        b_humero = int(self.m.jnt_bodyid[self.j_hombro[-1]])   # cuerpo que mueven las 3 juntas
+        self._fijar(q)
+        a0 = R.T @ (self.puntos()[0] - self.hombro)
+        self.anat = dict(b=b_humero, H0=self.d.xmat[b_humero].reshape(3, 3).copy(),
+                         a0=a0 / np.linalg.norm(a0),
+                         fuera=np.array([0.0, 1.0 if self.lado == "L" else -1.0, 0.0]),
+                         rot0=0.0, signo=1.0)
+        p = q.copy()                      # signo: girar hacia la rotacion externa debe sumar
+        p[i_rot] += s_rot * 0.2
+        self._fijar(p)
+        giro = self._anatomia()[2]
+        self._fijar(self.q_reposo)
+        if abs(giro) < 3.0:               # 0.2 rad son 11 grados: el eje no es el del humero
+            print(f"[aviso] hombro {self.lado}: la junta {self.nombres[i_rot]} no gira el humero "
+                  f"sobre su eje ({giro:.1f} deg): sigo con limites por junta")
+            self.anat = None
+            return
+        planos, elev_max = tabla_cono(rangos)
+        self.anat.update(rot0=float(rot0), signo=float(np.sign(giro)), planos=planos, elev_max=elev_max,
+                         rot=tuple(rangos["rotacion"]),
+                         acople=(np.array([e for e, _ in ACOPLE_ROTACION_DEG], dtype=float),
+                                 np.array([r for _, r in ACOPLE_ROTACION_DEG], dtype=float)))
+        elev, plano, rot = self._anatomia()
+        cono = ", ".join(f"{p:+.0f}:{e:.0f}" for p, e in zip(planos, elev_max))
+        print(f"[IK {self.lado}] hombro: limites ANATOMICOS (cono plano:elevacion max = {cono}; "
+              f"rotacion {rangos['rotacion'][0]:.0f} a {rangos['rotacion'][1]:.0f}). "
+              f"En reposo: elevacion {elev:.0f}, rotacion {rot:+.0f}. "
+              f"Juntas con caja de seguridad +-{HOLGURA_CAJA_HOMBRO_DEG:.0f} deg:")
+
+    def _anatomia(self):
+        """(elevacion, plano de elevacion, rotacion humeral) actuales, en grados.
+        Rotacion: + = externa, 0 = antebrazo hacia delante con el codo a 90 y el brazo colgando."""
+        A = self.anat
+        R = self.d.xmat[self.raiz].reshape(3, 3)
+        H = self.d.xmat[A["b"]].reshape(3, 3)
+        Q = R.T @ H @ A["H0"].T @ R
+        elev, plano, giro = angulos_hombro(R, A["fuera"], self.puntos()[0] - self.hombro, Q, A["a0"])
+        return elev, plano, A["rot0"] + A["signo"] * giro
+
+    def anatomia(self):
+        """Postura anatomica del hombro (diagnostico): dict en grados, o None si no hay limites."""
+        if self.anat is None:
+            return None
+        elev, plano, rot = self._anatomia()
+        return dict(elevacion=elev, plano=plano, rotacion=rot,
+                    exceso_deg=np.degrees(self._castigo_anat()))
+
+    def _castigo_anat(self):
+        """Cuanto se pasa el hombro de sus limites anatomicos (rad, >= 0, sin esquinas):
+        [elevacion fuera del cono, rotacion interna de mas, rotacion externa de mas]."""
+        A = self.anat
+        elev, plano, rot = self._anatomia()
+        e_max = float(np.interp(plano, A["planos"], A["elev_max"]))
+        r_min = A["rot"][0] + float(np.interp(elev, *A["acople"]))
+        r_max = A["rot"][1]
+        f = float(np.clip((175.0 - elev) / 15.0, 0.0, 1.0))   # con el brazo vertical el giro no esta definido
+        v = np.radians([elev - e_max, f * (r_min - rot), f * (rot - r_max)])
+        return bisagra_suave(v, np.radians(SUAVE_ANAT_DEG))[0]
+
+    def _jac_anat(self, q, c0, eps=1e-4):
+        """Jacobiano numerico del castigo anatomico (solo dependen de el las juntas del hombro).
+        Deja el modelo en q."""
+        Jh = np.zeros((len(c0), len(q)))
+        for i in range(len(self.j_hombro)):
+            p = q.copy()
+            p[i] += eps
+            self._fijar(p)
+            Jh[:, i] = (self._castigo_anat() - c0) / eps
+        self._fijar(q)
+        return Jh
 
     def bloquear_muneca(self, flexion=True, desviacion=True, valor=0.0):
         """Fija juntas de la muneca (la de giro nunca se toca):
@@ -517,6 +739,10 @@ class Brazo:
         if getattr(self, "mano", None) is not None:
             self.mano.reposo()
         self.R_obj_ult = None
+        if hasattr(self, "_dH_ant"):
+            self._dH_ant = np.zeros(len(self.juntas))
+        if hasattr(self, "atasco"):
+            self.atasco.reiniciar()
         if self.j_pinza:
             self.apertura = 1.0
             self.d.qpos[self.qadr_pinza] = self.q_abierto
@@ -603,8 +829,10 @@ class Brazo:
         p_c, p_m = self.puntos()
         ec, em = np.linalg.norm(obj_c - p_c), np.linalg.norm(obj_m - p_m)
         eo = 0.0 if R_obj is None else float(np.linalg.norm(log_rot(R_obj @ self.orientacion().T)))
-        total = np.sqrt((w_codo * ec) ** 2 + em ** 2 + (W_ORIENT * eo) ** 2)
-        return float(total), float(ec), float(em), eo
+        total2 = (w_codo * ec) ** 2 + em ** 2 + (W_ORIENT * eo) ** 2
+        if self.anat is not None:   # pasarse del limite anatomico tambien es error
+            total2 += float(np.sum((W_ANAT * self._castigo_anat()) ** 2))
+        return float(np.sqrt(total2)), float(ec), float(em), eo
 
     def _paso(self, obj_c, obj_m, R_obj, w_codo, lam, k_reposo, k_limite):
         """Un paso de IK que respeta los limites: si una articulacion se saldria de su
@@ -621,21 +849,41 @@ class Brazo:
             mujoco.mj_jac(m, d, None, self._jacr, p_m, self.b_orient)
             filas_J.append(W_ORIENT * self._jacr[:, self.dofs] * self.mascara_muneca)
             filas_e.append(W_ORIENT * log_rot(R_obj @ self.orientacion().T))
+        q = d.qpos[self.qadr].copy()
+        n = len(q)
+        if self.anat is not None:   # (1) limite anatomico: tarea que solo actua al pasarse
+            c = self._castigo_anat()
+            activas = c > 0
+            if activas.any():
+                filas_J.append(W_ANAT * self._jac_anat(q, c)[activas])
+                filas_e.append(-W_ANAT * c[activas])
         J = np.vstack(filas_J)
         e = np.concatenate(filas_e)
 
-        q = d.qpos[self.qadr].copy()
-        n = len(q)
         # Tarea secundaria (espacio nulo): volver a reposo y alejarse de los limites
         d_lo, d_hi = q - self.lo, self.hi - q
         empuje = (np.where(self.limitado & (d_lo < MARGEN_LIMITE), 1 - d_lo / MARGEN_LIMITE, 0.0)
                   - np.where(self.limitado & (d_hi < MARGEN_LIMITE), 1 - d_hi / MARGEN_LIMITE, 0.0))
         g = k_reposo * (self.q_reposo - q) + k_limite * empuje
+        # (3) sin objetivo de codo (brazo casi recto) el giro del codo lo decide el espacio nulo:
+        # se prefiere el codo hacia abajo y algo hacia fuera, como cuelga el de una persona
+        x = float(np.clip(w_codo / W_CODO_PLENO, 0.0, 1.0))
+        libertad = 1.0 - x * x * (3.0 - 2.0 * x)
+        if K_CODO_ABAJO > 0 and libertad > 0:
+            R = d.xmat[self.raiz].reshape(3, 3)
+            fuera = R[:, 1] if self.lado == "L" else -R[:, 1]
+            preferida = -R[:, 2] + CODO_FUERA * fuera
+            g = g + K_CODO_ABAJO * libertad * (J_c.T @ (preferida / np.linalg.norm(preferida)))
 
+        # (2) minima norma ponderada: las juntas que se acercan a su limite cuestan mas de mover
+        pesos, self._dH_ant = pesos_limites(q, self.lo, self.hi, self.limitado, self._dH_ant)
+        w_inv = 1.0 / pesos
         libres = np.ones(n, dtype=bool)
         for _ in range(3):
             Jl = J * libres  # columnas de las articulaciones bloqueadas a cero
-            J_pinv = np.linalg.solve(Jl @ Jl.T + lam ** 2 * np.eye(J.shape[0]), Jl).T
+            # J# = W^-1 J^T (J W^-1 J^T + lam^2 I)^-1
+            A = (Jl * w_inv) @ Jl.T + lam ** 2 * np.eye(J.shape[0])
+            J_pinv = w_inv[:, None] * np.linalg.solve(A, Jl).T
             dq = J_pinv @ e + (np.eye(n) - J_pinv @ Jl) @ g
             dq[~libres] = 0.0
             fuera = self.limitado & libres & (((q + dq) < self.lo) | ((q + dq) > self.hi))
@@ -699,14 +947,16 @@ class Brazo:
 
         ec, em, eo = self.resolver(obj_c, obj_m, R_obj, w_codo, max_cambio=VEL_MAX * dt)
         err = float(np.hypot(w_codo * ec, em))   # solo posicion
-        mejora = self.err_ant - err
         self.err_ant = err
-        atascado = err > ERROR_ATASCO and mejora < MEJORA_MIN * dt
-        self.t_atascado = self.t_atascado + dt if atascado else 0.0
-        if self.t_atascado > T_ATASCO and ahora - self.t_rescate > 1.0:
-            self.t_rescate, self.t_atascado = ahora, 0.0
+        atascado = self.atasco.actualizar(ahora, err)
+        self.t_atascado = self.t_atascado + dt if atascado else 0.0     # (diagnostico)
+        if atascado and ahora - self.t_rescate > 1.0:
+            self.t_rescate = ahora
+            self.atasco.reiniciar()
             q_mejor, err_mejor = self._rescate(obj_c, obj_m, R_obj, w_codo)
-            if err_mejor < 0.5 * err:
+            # se compara con la MISMA medida (posicion + limite anatomico) en la postura actual
+            err = self.error(obj_c, obj_m, w_codo, None)[0]
+            if err_mejor < 0.5 * err or err - err_mejor > MEJORA_RESCATE:
                 self.q_transicion = q_mejor
                 self.obj_rescate = np.array(obj_m, dtype=float)
                 print(f"[IK {self.lado}] RESCATE: el brazo cambia de postura "
@@ -730,7 +980,7 @@ class Brazo:
                 for b in np.linspace(*rangos[1], n_hombro[1]):
                     q[0], q[1] = a, b
                     self._fijar(q)
-                    e = np.linalg.norm(self.puntos()[0] - obj_c)
+                    e = np.linalg.norm(self.puntos()[0] - obj_c) + self._exceso_anat()
                     if e < mejor_e:
                         mejor, mejor_e = q.copy(), e
             q = mejor
@@ -741,15 +991,21 @@ class Brazo:
                 q[i_g], q[i_c] = g, c
                 self._fijar(q)
                 p_c, p_m = self.puntos()
-                e = np.hypot(0.6 * np.linalg.norm(p_c - obj_c), np.linalg.norm(p_m - obj_m))
+                e = np.hypot(0.6 * np.linalg.norm(p_c - obj_c), np.linalg.norm(p_m - obj_m)) + self._exceso_anat()
                 if e < mejor_e:
                     mejor, mejor_e = q.copy(), e
         self._fijar(q0)
         return mejor
 
+    def _exceso_anat(self):
+        """Castigo anatomico en metros equivalentes (0 sin limites anatomicos): las semillas de
+        los rescates tampoco deben ser posturas que una persona no puede hacer."""
+        return 0.0 if self.anat is None else float(W_ANAT * np.linalg.norm(self._castigo_anat()))
+
     def _rescate(self, obj_c, obj_m, R_obj, w_codo):
         """Prueba varias posturas de partida y devuelve la que mejor alcanza el objetivo."""
         q_act = self.d.qpos[self.qadr].copy()
+        dH_act = self._dH_ant.copy()          # los pasos de prueba no deben tocar los pesos
         semillas = [self.q_reposo.copy(), self._semilla_rejilla(obj_c, obj_m)]
         for i in range(len(self.j_hombro)):
             for delta in (-1.2, 1.2):
@@ -760,10 +1016,11 @@ class Brazo:
         for s in semillas:
             self._fijar(self._limitar(s))
             self.resolver(obj_c, obj_m, R_obj, w_codo, iteraciones=25)
-            err = self.error(obj_c, obj_m, w_codo, None)[0]     # se compara solo la posicion
+            err = self.error(obj_c, obj_m, w_codo, None)[0]     # posicion (+ limite anatomico)
             if err < mejor_err:
                 mejor_q, mejor_err = self.d.qpos[self.qadr].copy(), err
         self._fijar(q_act)
+        self._dH_ant = dH_act
         return mejor_q, mejor_err
 
 

@@ -45,13 +45,17 @@ objetivos entre fotos. metricas_imitacion.py mide lo bien que imita sobre una gr
 """
 import argparse
 import csv
+import threading
 import time
+import traceback
 
 import cv2
 import numpy as np
 
+import brazo_geometria
 import escenario_tuberias
 import grabacion
+import robot_tron2
 import mano_orca
 import fusion as fusion_mod
 from fusion import CalibracionCamaras, FusionCamaras, cargar_extrinsecas
@@ -92,10 +96,18 @@ ANG_RECTO = (4.0, 14.0)    # grados: por debajo el codo no cuenta; por encima cu
 ZONA_MUERTA_CODO = (2.0, 8.0)   # grados de flexion que se tratan como brazo recto (se atenuan)
 CALIDAD_MIN_ORIENT = 0.2   # calidad minima de la mano para fiarse de su orientacion
 ESPEJO_M = np.diag([1.0, -1.0, 1.0])   # reflexion izquierda-derecha en el marco del robot
+# (oct-2026) Coherencia del codo: un codo cuya rotacion humeral es imposible (antebrazo doblado
+# "hacia atras", tipico de la profundidad del codo con una sola camara) se gira alrededor de la
+# recta hombro-muneca hasta la rotacion posible mas cercana (brazo_geometria.limitar_rotacion_humeral).
+# La muneca no se mueve. Ademas, cuanto mas hay que corregirlo, menos se fia la IK del codo.
+COHERENCIA_CODO = True
+PESO_CODO_CORREGIDO_MIN = 0.3   # peso del codo (fraccion) con una correccion de CORRECCION_PLENA grados
+CORRECCION_PLENA = 90.0
 UMBRAL_CONGELADO = 0.08    # m: error de muneca a partir del cual se avisa de que el robot no llega
 HZ_VISOR = 30.0            # el visor de MuJoCo se refresca a esto
 HZ_VENTANA = 30.0          # ventana de la camara
 HZ_VENTANA2 = 15.0
+HZ_DIBUJO = 60.0           # ritmo maximo del hilo principal (visor + ventanas + teclas)
 
 COLOR_CODO = [1.0, 0.85, 0.0, 0.8]    # marcador amarillo en MuJoCo
 COLOR_MUNECA = [0.1, 1.0, 0.3, 0.8]   # marcador verde en MuJoCo
@@ -136,19 +148,53 @@ def flexion_minima(d_b, d_a, minimo_deg=FLEX_MIN_ROBOT):
     return np.cos(phi_n) * d_b + np.sin(phi_n) * perp
 
 
-def objetivos(robot, lado_robot, datos, R_cam, espejo):
-    """Direcciones del operador -> posiciones objetivo del codo y la muneca del robot."""
+def rango_rotacion(elev):
+    """Rotacion humeral posible (grados) segun la elevacion del brazo: los mismos limites que la
+    IK (robot_tron2.HOMBRO_HUMANO_DEG y ACOPLE_ROTACION_DEG). Vectorizado."""
+    rmin, rmax = robot_tron2.HOMBRO_HUMANO_DEG["rotacion"]
+    ac = robot_tron2.ACOPLE_ROTACION_DEG
+    e = np.asarray(elev, dtype=float)
+    perdida = np.interp(e, [a for a, _ in ac], [p for _, p in ac])
+    return rmin + perdida, np.full_like(e, rmax)
+
+
+def objetivos(robot, lado_robot, datos, R_cam, espejo, memoria=None):
+    """Direcciones del operador -> posiciones objetivo del codo y la muneca del robot.
+    memoria: dict persistente del teleop (por lado del robot) para la coherencia del codo; ahi
+    queda tambien 'correccion' (grados que se ha girado el codo) para rebajar su peso."""
     brazo = robot.brazos[lado_robot]
     d_b = robot.R_base @ (R_cam @ datos["dir_brazo"])
     d_a = robot.R_base @ (R_cam @ enderezar(datos["dir_brazo"], datos["dir_antebrazo"]))
     if espejo:
         d_b = ESPEJO_M @ d_b
         d_a = ESPEJO_M @ d_a
+    d_b_op, d_a_op = d_b, d_a          # las del operador (para las metricas), sin corregir
+    if COHERENCIA_CODO and robot_tron2.HOMBRO_HUMANO_DEG is not None \
+            and robot_tron2.HOMBRO_HUMANO_DEG.get("rotacion") is not None:
+        m = {} if memoria is None else memoria.setdefault(lado_robot, {})
+        clave = (id(datos), espejo, id(R_cam))
+        if m.get("clave") == clave:      # misma foto que el ciclo anterior: no se recalcula
+            d_b, d_a, psi = m["resultado"]
+        else:
+            fuera = np.array([0.0, 1.0 if lado_robot == "L" else -1.0, 0.0])   # marco del torso
+            Rb = robot.R_base
+            db_l, da_l, psi = brazo_geometria.limitar_rotacion_humeral(
+                Rb.T @ d_b, Rb.T @ d_a, fuera, rango_rotacion, brazo.L_brazo, brazo.L_antebrazo,
+                psi_previo=m.get("psi", 0.0))
+            d_b, d_a = Rb @ db_l, Rb @ da_l
+            m.update(clave=clave, resultado=(d_b, d_a, psi), psi=psi, datos=datos)  # 'datos' mantiene vivo el id
+        m["correccion"] = abs(psi)
     # brazo casi estirado = singularidad de la IK: codo minimamente doblado (codo y muneca coherentes)
     d_a_robot = flexion_minima(d_b, d_a)
     codo = brazo.hombro + brazo.L_brazo * d_b
     muneca = codo + brazo.L_antebrazo * d_a_robot
-    return codo, muneca, d_b, d_a
+    return codo, muneca, d_b_op, d_a_op
+
+
+def factor_correccion(correccion_deg):
+    """Peso del codo (fraccion) segun cuanto se ha tenido que girar para que sea posible."""
+    x = min(correccion_deg / CORRECCION_PLENA, 1.0)
+    return 1.0 - (1.0 - PESO_CODO_CORREGIDO_MIN) * x
 
 
 def marco_mano(robot, mano, R_cam, espejo):
@@ -410,6 +456,7 @@ class Teleoperador:
         if robot.manos:
             self.estado["modo_dedos"] = "imitacion" if not next(iter(robot.manos.values())).estado["pinza_habilitada"] else "pinzas"
         self.suaves = {}          # lado del robot -> objetivos suavizados {codo, muneca, w, R}
+        self.coherencia = {}      # lado del robot -> memoria de la coherencia del codo (objetivos())
         self.calib = None         # CalibracionCamaras en curso (tecla c)
         self.t_mensaje = 0.0
         self.n_mano = -1
@@ -459,6 +506,7 @@ class Teleoperador:
     # ------------------------------------------------------------ acciones (teclas)
     def _reiniciar_objetivos(self):
         self.suaves.clear()
+        self.coherencia.clear()
         self.estado["errores"].clear()
         self.estado["pinzas"].clear()
         self.estado["orient"].clear()
@@ -568,8 +616,8 @@ class Teleoperador:
             # movimiento continuo a 60 Hz en lugar de un salto por cada foto de la camara.
             for lado_h, datos in brazos.items():
                 lado_r = OTRO_LADO[lado_h] if estado["espejo"] else lado_h
-                codo, muneca, d_b, d_a = objetivos(robot, lado_r, datos, R_cam, estado["espejo"])
-                w = peso_codo(datos)
+                codo, muneca, d_b, d_a = objetivos(robot, lado_r, datos, R_cam, estado["espejo"], self.coherencia)
+                w = peso_codo(datos) * factor_correccion(self.coherencia.get(lado_r, {}).get("correccion", 0.0))
                 if lado_r not in self.suaves:
                     self.suaves[lado_r] = dict(
                         f_codo=ObjetivoSuave(OMEGA_OBJETIVO, ZONA_MUERTA_OBJ),
@@ -678,6 +726,68 @@ class Teleoperador:
             t0 = self.reloj()
             self.paso(t0, dt)
             self.reloj.avanzar(dt)
+
+
+class HiloControl(threading.Thread):
+    """Bucle del robot (Teleoperador.paso: fusion -> objetivos -> IK -> manos) a FREC_CONTROL en
+    su propio hilo.
+    (oct-2026) Antes iba en el mismo bucle que el visor de MuJoCo y las dos ventanas de OpenCV y
+    el robot se movia a 18-20 Hz en vez de 60, incluso en PAUSA (con la IK parada): lo que lo
+    frenaba era el dibujo. Ahora el hilo principal solo dibuja y lee teclas; todo lo que toca el
+    estado del teleop o robot.d (paso, v.sync, textos, teclas) va con 'lock'."""
+
+    def __init__(self, tele, frec=FREC_CONTROL):
+        super().__init__(daemon=True, name="control_robot")
+        self.tele, self.frec = tele, frec
+        self.lock = threading.Lock()
+        self.snap, self.marcadores = None, []
+        self.activo, self.error = True, None
+        self._n, self._t_med, self._t0_med, self._t_max = 0, 0.0, time.monotonic(), 0.0
+
+    def run(self):
+        periodo = 1.0 / self.frec
+        t_ant = t_sig = time.monotonic()
+        while self.activo:
+            t0 = time.monotonic()
+            dt = min(t0 - t_ant, 0.1)
+            t_ant = t0
+            t_s = time.perf_counter()
+            try:
+                with self.lock:
+                    self.snap, self.marcadores = self.tele.paso(t0, dt)
+            except Exception as e:         # se avisa al hilo principal, que cierra
+                traceback.print_exc()
+                self.error = e
+                return
+            coste = time.perf_counter() - t_s
+            self._n += 1
+            self._t_med += coste
+            self._t_max = max(self._t_max, coste)
+            t_sig += periodo
+            espera = t_sig - time.monotonic()
+            if espera > 0:
+                time.sleep(espera)
+            else:                          # atrasado: no se intenta recuperar de golpe
+                t_sig = time.monotonic()
+
+    def medir(self):
+        """(Hz, ms medios de paso(), ms maximos) desde la ultima llamada."""
+        ahora = time.monotonic()
+        n = max(self._n, 1)
+        res = (self._n / max(ahora - self._t0_med, 1e-6), self._t_med * 1000 / n, self._t_max * 1000)
+        self._n, self._t_med, self._t0_med, self._t_max = 0, 0.0, ahora, 0.0
+        return res
+
+    def parar(self):
+        self.activo = False
+        if self.is_alive():
+            self.join(timeout=1.0)
+
+
+def copiar_estado(estado):
+    """Copia del estado del teleop para dibujar sin el cerrojo (los dict de dentro tambien)."""
+    return {k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
+            for k, v in estado.items()}
 
 
 class RelojSimulado:
@@ -798,13 +908,14 @@ def main():
                             grabadora=grabadora, log_csv=args.log_csv, motivo_sin_extrinsecas=motivo)
 
     robot, escena, estado = tele.robot, tele.escena, tele.estado
-    perfil, t_perfil = {}, time.monotonic()
     t_sync, t_ventana, t_ventana2 = -1e9, -1e9, -1e9
     desde_detras = True
     n_mostrado, n_mostrado2, t_aviso_negra = -1, -1, -1e9
+    perfil, t_perfil = {}, time.monotonic()
     cv2.namedWindow(VENTANA, cv2.WINDOW_NORMAL)
     if len(hilos) > 1:
         cv2.namedWindow(VENTANA2, cv2.WINDOW_NORMAL)
+    control = HiloControl(tele)
 
     try:
         with mujoco.viewer.launch_passive(robot.m, robot.d, show_left_ui=False, show_right_ui=False) as v:
@@ -812,12 +923,14 @@ def main():
             with v.lock():
                 v.opt.geomgroup[escenario_tuberias.GRUPO_ESCENARIO] = 0
             if args.escenario == "tuberias":
-                escena.activar(v)
-            t_ant = time.monotonic()
+                with control.lock:
+                    escena.activar(v)
+            control.start()      # el robot va en su propio hilo; este solo dibuja y lee teclas
             while v.is_running():
                 t0 = time.monotonic()
-                dt = min(t0 - t_ant, 0.1)
-                t_ant = t0
+                if control.error is not None:
+                    print("Error en el bucle del robot:", repr(control.error))
+                    break
                 if tele.fusion.error:
                     print("Error en el seguimiento:", tele.fusion.error)
                     break
@@ -826,22 +939,22 @@ def main():
                     break
 
                 t_s = time.perf_counter()
-                snap, marcadores = tele.paso(t0, dt)
-                perfil["teleop"] = perfil.get("teleop", 0.0) + time.perf_counter() - t_s
-
-                t_s = time.perf_counter()
                 if t0 - t_sync >= 1.0 / HZ_VISOR:
                     t_sync = t0
-                    with v.lock():
-                        dibujar_marcadores(v.user_scn, marcadores)
-                    v.sync()
+                    with control.lock:          # el hilo del robot no toca robot.d mientras se copia
+                        with v.lock():
+                            dibujar_marcadores(v.user_scn, control.marcadores)
+                        v.sync()
                 perfil["mujoco visor"] = perfil.get("mujoco visor", 0.0) + time.perf_counter() - t_s
                 t_s = time.perf_counter()
 
-                # Dos ventanas, cada una con su ritmo (si las dos tocan, la mas atrasada)
-                crudo0 = hilos[0].ultimo_crudo()
+                # Dos ventanas, cada una con su ritmo (si las dos tocan, la mas atrasada). Lo que
+                # se lee del estado del teleop se copia con el cerrojo; el dibujo, ya sin el.
+                with control.lock:
+                    snap = control.snap
+                    crudo0 = hilos[0].ultimo_crudo()
+                    crudo1 = hilos[1].ultimo_crudo() if len(hilos) > 1 else None
                 n_vista = -1 if crudo0 is None else crudo0["n"]
-                crudo1 = hilos[1].ultimo_crudo() if len(hilos) > 1 else None
                 toca1 = snap is not None and n_vista != n_mostrado and t0 - t_ventana >= 1.0 / HZ_VENTANA
                 toca2 = (crudo1 is not None and crudo1["n"] != n_mostrado2
                          and t0 - t_ventana2 >= 1.0 / HZ_VENTANA2)
@@ -851,27 +964,30 @@ def main():
                 if toca1:
                     n_mostrado = n_vista
                     t_ventana = t0
-                    estado["fps_seg"] = tele.fusion.fps
-                    estado["fps_cam"] = hilos[0].fps_camara
-                    estado["escena"] = escena.texto() if escena else ""
-                    fu_v = snap.get("fusion")
-                    base_es_a = (not fu_v) or fu_v["activas"][:1] in ([], ["A"])
-                    vista = vista_fluida(hilos[0], snap) if base_es_a else snap
-                    textos = textos_hud(snap, estado, dos_ventanas=len(hilos) > 1)
-                    cv2.imshow(VENTANA, componer_vista(vista, estado, textos["A"]))
+                    with control.lock:
+                        estado["fps_seg"] = tele.fusion.fps
+                        estado["fps_cam"] = hilos[0].fps_camara
+                        estado["escena"] = escena.texto() if escena else ""
+                        fu_v = snap.get("fusion")
+                        base_es_a = (not fu_v) or fu_v["activas"][:1] in ([], ["A"])
+                        vista = vista_fluida(hilos[0], snap) if base_es_a else snap
+                        textos = textos_hud(snap, estado, dos_ventanas=len(hilos) > 1)
+                        estado_v = copiar_estado(estado)
+                    cv2.imshow(VENTANA, componer_vista(vista, estado_v, textos["A"]))
                 elif toca2:
                     n_mostrado2 = crudo1["n"]
                     t_ventana2 = t0
-                    snap_b = hilos[1].ultimo()
-                    if snap_b is not None:
-                        snap_b = vista_fluida(hilos[1], snap_b)
-                    else:
+                    with control.lock:
+                        snap_b = hilos[1].ultimo()
+                        if snap_b is not None:
+                            snap_b = vista_fluida(hilos[1], snap_b)
+                        textos = textos_hud(snap, estado)
+                    if snap_b is None:
                         snap_b = dict(bgr=crudo1["bgr"], depth=None, lm2d=None, manos=[], brazos={})
                     if crudo1["bgr"].max() == 0 and not args.reproducir and t0 - t_aviso_negra > 5.0:
                         t_aviso_negra = t0
                         print("[camara B] llegan fotogramas completamente NEGROS: revisa el cable USB / "
                               "que no la use otro programa")
-                    textos = textos_hud(snap, estado)
                     cv2.imshow(VENTANA2, componer_vista_secundaria(snap_b, hilos[1].fps_camara, hilos[1].fps,
                                                                    textos["B"]))
 
@@ -880,24 +996,30 @@ def main():
                 perfil["ciclos"] = perfil.get("ciclos", 0) + 1
                 if t0 - t_perfil > 10.0:
                     n_c = max(perfil.pop("ciclos"), 1)
-                    hz = n_c / (t0 - t_perfil)
-                    if hz < 45:
-                        print(f"[rendimiento] bucle del robot a {hz:.0f} Hz (deberia ir a {FREC_CONTROL:.0f}). ms por ciclo: "
-                              + " | ".join(f"{k} {v * 1000 / n_c:.1f}" for k, v in perfil.items())
+                    hz_c, ms_c, ms_max = control.medir()
+                    if hz_c < 45:
+                        print(f"[rendimiento] bucle del robot a {hz_c:.0f} Hz (deberia ir a {FREC_CONTROL:.0f}): "
+                              f"teleop {ms_c:.1f} ms por ciclo (max {ms_max:.0f}) | hilo de dibujo a "
+                              f"{n_c / (t0 - t_perfil):.0f} Hz: "
+                              + " | ".join(f"{k} {v_ * 1000 / n_c:.1f} ms" for k, v_ in perfil.items())
                               + f" | camaras {' / '.join(f'{h.fps:.0f}' for h in hilos)} fps")
                     perfil, t_perfil = {}, t0
-                if tecla != 255 and tele.tecla(tecla, t0, visor=v):
-                    break
+                if tecla != 255:
+                    with control.lock:
+                        salir = tele.tecla(tecla, t0, visor=v)
+                    if salir:
+                        break
                 if tecla == ord("v"):
                     desde_detras = not desde_detras
                     colocar_camara(v, robot, desde_detras)
                 if cv2.getWindowProperty(VENTANA, cv2.WND_PROP_VISIBLE) < 1 and n_mostrado >= 0:
                     break
 
-                espera = 1.0 / FREC_CONTROL - (time.monotonic() - t0)
+                espera = 1.0 / HZ_DIBUJO - (time.monotonic() - t0)
                 if espera > 0:
                     time.sleep(espera)
     finally:
+        control.parar()
         tele.cerrar()
         for hilo_k in hilos:
             hilo_k.parar()
