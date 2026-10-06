@@ -80,7 +80,7 @@ PINZA_RECORRIDO = {}
 VEL_TRANSICION = 1.0   # rad/s: al cambiar a otra solucion tras un rescate
 MARGEN_LIMITE = 0.1    # rad: junto a un limite se empuja la articulacion hacia dentro
 ERROR_ATASCO = 0.10    # m: error a partir del cual se considera que el brazo esta atascado
-T_ATASCO = 1.0         # s: tiempo atascado antes de buscar otra solucion
+T_ATASCO = 0.5         # s: tiempo atascado antes de buscar otra solucion
 MEJORA_MIN = 0.05      # m/s: si el error baja mas rapido que esto, el brazo NO esta atascado
 T_TRANSICION_MAX = 2.0 # s: una transicion de rescate nunca dura mas que esto
 CANCELA_TRANSICION = 0.10  # m: si el objetivo se mueve esto durante la transicion, se cancela
@@ -94,6 +94,22 @@ NORMAL_PINZA_REPOSO = np.array([0.0, 1.0, 0.0])
 # Solo estetica: la calibracion [c] sigue siendo con el operador con los brazos colgando, y la
 # IK sigue usando q_reposo (brazo recto) para el espacio nulo y los rescates. 0 = como antes.
 CODO_REPOSO_DEG = 90.0
+# Giro humeral (ultima junta del hombro) que abre los antebrazos hacia fuera en ese reposo:
+# separa las munecas entre si sin despegar los codos del cuerpo. 0 = antebrazos paralelos.
+SEPARACION_MUNECAS_DEG = -15.0
+# Abduccion del hombro en ese reposo: separa los CODOS del cuerpo. 0 = codos pegados.
+SEPARACION_CODOS_DEG = 20.0
+# Rango del codo en grados de flexion "humana" (0 = brazo recto). None = limites del XML.
+FLEXION_CODO_DEG = (0.0, 160.0)
+# Rangos humanos del hombro en grados (None = limites del XML):
+#   flexion:   + = brazo hacia delante/arriba, - = extension (hacia atras)
+#   abduccion: + = brazo hacia el lado,        - = aduccion (cruzar por delante del cuerpo)
+#   rotacion:  con el codo a 90, + = externa (antebrazo hacia fuera), - = interna
+HOMBRO_HUMANO_DEG = dict(flexion=(-60.0, 180.0), abduccion=(-30.0, 180.0), rotacion=(-70.0, 90.0))
+# Bloquear la flexion/extension de la muneca (se queda en 0, la de reposo)
+BLOQUEAR_FLEXION_MUNECA = True
+# Bloquear la desviacion radial/ulnar de la muneca (se queda en 0, la de reposo)
+BLOQUEAR_DESVIACION_MUNECA = True
 
 
 def nombre(m, tipo, i):
@@ -186,7 +202,7 @@ class Brazo:
         self._preparar_agarre()
 
         # --- Geometria del brazo, medida en la postura de reposo (brazo recto) ---
-        self.reposo(self.q_reposo) 
+        self.reposo(self.q_reposo)
         mujoco.mj_kinematics(m, d)
         mujoco.mj_comPos(m, d)
 
@@ -228,29 +244,173 @@ class Brazo:
         self.q_transicion = None
         self.t_atascado, self.t_rescate = 0.0, -1e9
         self.rng = np.random.default_rng(0)
-                # postura visual de reposo (curl) y el brazo se queda en ella al arrancar
+        # postura visual de reposo (curl) y el brazo se queda en ella al arrancar
+        if FLEXION_CODO_DEG is not None:
+            self._limitar_codo(*FLEXION_CODO_DEG)
+        if HOMBRO_HUMANO_DEG is not None:
+            self._limitar_hombro(HOMBRO_HUMANO_DEG)
         self.q_reposo_visual = self._postura_visual()
         self.reposo()
 
     def _postura_visual(self):
-        """q_reposo con el codo doblado CODO_REPOSO_DEG. El signo se elige solo: el que lleva
-        la muneca mas hacia delante del torso (asi no depende del convenio del URDF)."""
+        """q_reposo con el codo doblado CODO_REPOSO_DEG y el antebrazo abierto hacia fuera
+        SEPARACION_MUNECAS_DEG. Los signos se eligen solos (no dependen del convenio del URDF):
+        el codo, el que lleva la muneca mas hacia delante del torso; el giro humeral, el que
+        la lleva mas hacia fuera (y del robot: +y = su izquierda)."""
         q = self.q_reposo.copy()
-        if not CODO_REPOSO_DEG:
-            return q
-        i_c = self.juntas.index(self.j_codo)
-        delante = self.d.xmat[self.raiz].reshape(3, 3)[:, 0]
-        mejor, mejor_x = q, -np.inf
-        for signo in (1.0, -1.0):
-            p = q.copy()
-            p[i_c] += signo * np.radians(CODO_REPOSO_DEG)
-            p = self._limitar(p)
-            self._fijar(p)
-            x = float(np.dot(self.puntos()[1] - self.hombro, delante))
-            if x > mejor_x:
-                mejor, mejor_x = p, x
+        R_torso = self.d.xmat[self.raiz].reshape(3, 3)
+        delante = R_torso[:, 0]
+        fuera = R_torso[:, 1] if self.lado == "L" else -R_torso[:, 1]
+
+        def mejor_signo(q, i, grados, direccion, punto=1):
+            if not grados:
+                return q
+            mejor, mejor_v = q, -np.inf
+            for signo in (1.0, -1.0):
+                p = q.copy()
+                p[i] += signo * np.radians(grados)
+                p = self._limitar(p)
+                self._fijar(p)
+                v = float(np.dot(self.puntos()[punto] - self.hombro, direccion))
+                if v > mejor_v:
+                    mejor, mejor_v = p, v
+            return mejor
+        if SEPARACION_CODOS_DEG and len(self.j_hombro) >= 2:
+            def codo_fuera(p):
+                self._fijar(p)
+                return float(np.dot(self.puntos()[0] - self.hombro, fuera))
+            # de las dos primeras juntas del hombro, la que mas abre el codo (la abduccion)
+            q = max((mejor_signo(q, i, SEPARACION_CODOS_DEG, fuera, punto=0) for i in (0, 1)),
+                    key=codo_fuera)
+        q = mejor_signo(q, self.juntas.index(self.j_codo), CODO_REPOSO_DEG, delante)
+        if len(self.j_hombro) >= 3:
+            # positivo = antebrazos hacia fuera, negativo = hacia dentro (munecas mas juntas)
+            q = mejor_signo(q, len(self.j_hombro) - 1, abs(SEPARACION_MUNECAS_DEG),
+                            fuera if SEPARACION_MUNECAS_DEG > 0 else -fuera)
         self._fijar(self.q_reposo)
-        return mejor
+        return q
+
+    def _flexion_codo(self):
+        """Flexion actual del codo en grados (0 = brazo recto), medida con la geometria."""
+        p_c, p_m = self.puntos()
+        b, a = p_c - self.hombro, p_m - p_c
+        return float(np.degrees(np.arccos(np.clip(
+            np.dot(b, a) / (np.linalg.norm(b) * np.linalg.norm(a)), -1.0, 1.0))))
+
+    def _limitar_codo(self, flex_min, flex_max):
+        """Cambia los limites de la junta del codo a un rango de flexion humano."""
+        i = self.juntas.index(self.j_codo)
+        q = self.q_reposo.copy()
+        delante = self.d.xmat[self.raiz].reshape(3, 3)[:, 0]
+
+        def avance(dq):
+            p = q.copy()
+            p[i] += dq
+            self._fijar(p)
+            return float(np.dot(self.puntos()[1] - self.hombro, delante))
+
+        signo = 1.0 if avance(0.3) > avance(-0.3) else -1.0   # sentido en que flexiona
+        self._fijar(q)
+        flex0 = self._flexion_codo()                          # flexion con q = q_reposo
+        lo = q[i] + signo * np.radians(flex_min - flex0)
+        hi = q[i] + signo * np.radians(flex_max - flex0)
+        lo, hi = min(lo, hi), max(lo, hi)
+        if self.limitado[i]:                                  # nunca mas alla de lo que da el robot
+            lo, hi = max(lo, self.lo[i]), min(hi, self.hi[i])
+        self.lo[i], self.hi[i], self.limitado[i] = lo, hi, True
+        self.q_reposo[i] = np.clip(self.q_reposo[i], lo, hi)
+        print(f"[IK {self.lado}] codo {self.nombres[i]}: [{np.degrees(lo):+.0f}, {np.degrees(hi):+.0f}] deg "
+              f"(flexion {flex_min:.0f}-{flex_max:.0f}; con q=0 el brazo tiene {flex0:.0f} deg)")
+
+    def _signo(self, q, i, punto, direccion, paso=0.3):
+        """+1 o -1: sentido en que hay que girar la junta i (desde q) para llevar el punto
+        (0 = codo, 1 = muneca) hacia 'direccion'."""
+        def v(dq):
+            p = q.copy()
+            p[i] += dq
+            self._fijar(p)
+            return float(np.dot(self.puntos()[punto] - self.hombro, direccion))
+        s = 1.0 if v(paso) > v(-paso) else -1.0
+        self._fijar(self.q_reposo)
+        return s
+
+    def _poner_rango(self, i, q_i, signo, ang0, a_min, a_max, papel):
+        """Limites de la junta i para que el angulo anatomico quede en [a_min, a_max] (grados).
+        q_i: valor de la junta en la postura medida, donde el angulo anatomico vale ang0."""
+        lo = q_i + signo * np.radians(a_min - ang0)
+        hi = q_i + signo * np.radians(a_max - ang0)
+        lo, hi = min(lo, hi), max(lo, hi)
+        if self.limitado[i]:                    # nunca mas alla de lo que da el robot
+            lo, hi = max(lo, self.lo[i]), min(hi, self.hi[i])
+        self.lo[i], self.hi[i], self.limitado[i] = lo, hi, True
+        self.q_reposo[i] = np.clip(self.q_reposo[i], lo, hi)
+        print(f"[IK {self.lado}] hombro {papel:9s} {self.nombres[i]}: [{np.degrees(lo):+.0f}, {np.degrees(hi):+.0f}] deg "
+              f"({a_min:.0f} a {a_max:.0f}; en reposo {ang0:+.0f})")
+
+    def _limitar_hombro(self, rangos):
+        """Rangos humanos en el hombro. Identifica cada junta por geometria con el brazo
+        colgando: flexion = la que mas lleva el codo hacia delante, abduccion = la otra de
+        las dos primeras, rotacion = la ultima (giro humeral)."""
+        if len(self.j_hombro) < 3:
+            print(f"[aviso] hombro {self.lado} con {len(self.j_hombro)} juntas: no se limita")
+            return
+        q = self.q_reposo.copy()
+        R = self.d.xmat[self.raiz].reshape(3, 3)
+        delante, arriba = R[:, 0], R[:, 2]
+        fuera = R[:, 1] if self.lado == "L" else -R[:, 1]
+        self._fijar(q)
+        c0 = self.puntos()[0].copy()
+
+        def avance(i):
+            p = q.copy()
+            p[i] += 0.3
+            self._fijar(p)
+            return abs(float(np.dot(self.puntos()[0] - c0, delante)))
+
+        i_flex = max((0, 1), key=avance)
+        i_abd = 1 - i_flex
+        i_rot = len(self.j_hombro) - 1
+        self._fijar(q)
+        b = self.puntos()[0] - self.hombro                     # brazo (hombro -> codo)
+        flex0 = np.degrees(np.arctan2(np.dot(b, delante), -np.dot(b, arriba)))
+        abd0 = np.degrees(np.arctan2(np.dot(b, fuera), -np.dot(b, arriba)))
+        s_flex = self._signo(q, i_flex, 0, delante)
+        s_abd = self._signo(q, i_abd, 0, fuera)
+        # rotacion: se mide con el codo a 90 grados (0 = antebrazo hacia delante, + = externa)
+        i_c = self.juntas.index(self.j_codo)
+        q90 = q.copy()
+        q90[i_c] += self._signo(q, i_c, 1, delante) * np.pi / 2
+        q90 = self._limitar(q90)
+        self._fijar(q90)
+        p_c, p_m = self.puntos()
+        rot0 = np.degrees(np.arctan2(np.dot(p_m - p_c, fuera), np.dot(p_m - p_c, delante)))
+        s_rot = self._signo(q90, i_rot, 1, fuera)
+        self._fijar(self.q_reposo)
+        for i, s, a0, clave, papel in ((i_flex, s_flex, flex0, "flexion", "flexion"),
+                                       (i_abd, s_abd, abd0, "abduccion", "abduccion"),
+                                       (i_rot, s_rot, rot0, "rotacion", "rotacion")):
+            if rangos.get(clave) is not None:
+                self._poner_rango(i, q[i], s, a0, *rangos[clave], papel)
+
+    def bloquear_muneca(self, flexion=True, desviacion=True, valor=0.0):
+        """Fija juntas de la muneca (la de giro nunca se toca):
+          flexion/extension -> la de eje mas paralelo al ANCHO de la palma
+          desviacion radial/ulnar -> la otra (eje casi paralelo a la NORMAL de la palma)."""
+        mujoco.mj_kinematics(self.m, self.d)
+        ancho = self.orientacion()[:, 1]
+        candidatas = [j for j in self.j_muneca if j != self.j_giro]
+        j_flex = max(candidatas, key=lambda j: abs(np.dot(self.d.xaxis[j], ancho)))
+        j_desv = next((j for j in candidatas if j != j_flex), None)
+        for j, activo, papel in ((j_flex, flexion, "flexion/extension"),
+                                 (j_desv, desviacion, "desviacion radial/ulnar")):
+            if not activo or j is None:
+                continue
+            i = self.juntas.index(j)
+            self.lo[i] = self.hi[i] = valor
+            self.limitado[i] = True
+            self.q_reposo[i] = self.q_reposo_visual[i] = valor
+            self.d.qpos[self.qadr[i]] = valor
+            print(f"[IK {self.lado}] {papel} de la muneca BLOQUEADA: {self.nombres[i]} = {np.degrees(valor):.0f} deg")
 
     # ---------------- deteccion de la cadena ----------------
     def _buscar_ef(self):
@@ -352,6 +512,7 @@ class Brazo:
         return self._a_mundo(self.b_codo, self.loc_codo), self._a_mundo(self.b_muneca, self.loc_muneca)
 
     def reposo(self, q=None):
+        """Lleva el brazo a la postura visual de reposo (o a 'q' si se pasa)."""
         self.d.qpos[self.qadr] = self.q_reposo_visual if q is None else q
         if getattr(self, "mano", None) is not None:
             self.mano.reposo()
@@ -634,6 +795,9 @@ class RobotTron2:
             for lado, brazo in self.brazos.items():
                 brazo.mano = self.manos[lado] = mano_orca.ManoOrca(self.m, self.d, lado, reloj=reloj)
                 brazo.preparar_orientacion(brazo.mano.palma, brazo.mano.marco_sem_local)
+        if BLOQUEAR_FLEXION_MUNECA or BLOQUEAR_DESVIACION_MUNECA:
+            for brazo in self.brazos.values():
+                brazo.bloquear_muneca(BLOQUEAR_FLEXION_MUNECA, BLOQUEAR_DESVIACION_MUNECA)
         self.actualizar()
         # Orientacion del torso en el mundo (x delante, y izquierda, z arriba)
         self.R_base = self.d.xmat[self.brazos["L"].raiz].reshape(3, 3).copy()

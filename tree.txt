@@ -1,16 +1,20 @@
 .
 ├── arranque.sh
 ├── biomecanica.py
+├── brazo_geometria.py
+├── calibrar_extrinseca.py
 ├── camaras.py
-├── config.py
+├── config_mano.py
 ├── decoracion
 │   ├── I+D+I_DENOMIN_GRUPO_RGB.png
 │   └── Logo_Elecnor_AZUL.png
 ├── escenario_tuberias.py
 ├── fusion.py
+├── grabacion.py
 ├── hand_landmarker.task
 ├── mano_orca.py
-├── MUJOCO_LOG.TXT
+├── manos3d.py
+├── metricas_imitacion.py
 ├── orca_core-main
 │   ├── CLAUDE.md
 │   ├── demo
@@ -1221,25 +1225,36 @@
 │       └── scene_right.xml
 ├── package.xml
 ├── pose_landmarker_full.task
+├── prueba_ik.py
 ├── __pycache__
 │   ├── biomecanica.cpython-312.pyc
+│   ├── brazo_geometria.cpython-312.pyc
 │   ├── camaras.cpython-312.pyc
-│   ├── config.cpython-312.pyc
+│   ├── config_mano.cpython-312.pyc
 │   ├── escenario_tuberias.cpython-312.pyc
+│   ├── escenario_tuberias.cpython-313.pyc
 │   ├── fusion.cpython-312.pyc
+│   ├── grabacion.cpython-312.pyc
 │   ├── mano_orca.cpython-312.pyc
+│   ├── manos3d.cpython-312.pyc
+│   ├── prueba_ik.cpython-312.pyc
+│   ├── requisitos.cpython-312.pyc
 │   ├── retargeting.cpython-312.pyc
 │   ├── robot_tron2.cpython-312.pyc
 │   ├── seguimiento_brazos.cpython-312.pyc
 │   ├── seguimiento_manos.cpython-312.pyc
-│   └── suavizador.cpython-312.pyc
+│   ├── simular_operador.cpython-312.pyc
+│   ├── suavizado.cpython-312.pyc
+│   └── teleop_tron2.cpython-312.pyc
 ├── README.md
 ├── requirements.txt
+├── requisitos.py
 ├── retargeting.py
 ├── robot_tron2.py
 ├── seguimiento_brazos.py
 ├── seguimiento_manos.py
-├── suavizador.py
+├── simular_operador.py
+├── suavizado.py
 ├── taladro
 │   ├── drill.obj
 │   ├── escena_taladro.xml
@@ -1252,6 +1267,16 @@
 │   ├── preparando_taladro.py
 │   └── textures_detailed.zip
 ├── teleop_tron2.py
+├── tests
+│   ├── __pycache__
+│   │   ├── test_teleop_geometry.cpython-312-pytest-7.4.4.pyc
+│   │   └── test_teleop_geometry.cpython-313.pyc
+│   ├── test_autocalibracion.py
+│   ├── test_fusion_cruces.py
+│   ├── test_fusion_imu.py
+│   ├── test_imu.py
+│   ├── test_requisitos.py
+│   └── test_teleop_geometry.py
 ├── tree.txt
 ├── tron2a
 │   ├── DACH_TRON2A
@@ -1653,4 +1678,4 @@
 │           └── robot.xml
 └── ver_tron2.py
 
-145 directories, 1509 files
+147 directories, 1532 files

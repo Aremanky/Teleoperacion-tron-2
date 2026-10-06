@@ -232,7 +232,77 @@ def colorear_profundidad(depth):
     return img
 
 
-def componer_vista(snap, estado):
+def textos_hud(snap, estado, dos_ventanas=True):
+    """Reparte los textos del HUD entre las dos ventanas. Devuelve {"A": (lineas, rojas),
+    "B": (lineas, rojas)}.
+      A (la principal): estado del teleop, lo que se ve del operador, error del robot,
+        mensajes de las teclas (calibrando, reposo...) y avisos de robot QUIETO.
+      B: camaras y fusion, longitudes del operador, escenario y requisitos (avisos rojos).
+    Con dos_ventanas=False todo va a A (como antes)."""
+    snap = snap or {}
+    brazos, aperturas = snap.get("brazos") or {}, snap.get("aperturas") or {}
+    a_lin, a_roj, b_lin, b_roj = [], [], [], []
+    a_lin.append(f"Camara {estado.get('fps_cam', 0.0):3.0f} fps | seguimiento {estado['fps_seg']:4.1f} fps | robot {estado['fps_control']:3.0f} Hz | "
+                 f"{'PAUSA' if estado['pausado'] else 'TELEOP'} | {'espejo' if estado['espejo'] else 'directo'} | "
+                 f"{'calibrado' if estado['calibrado'] else 'sin calibrar'}"
+                 + (f" | dedos: {estado['modo_dedos']}" if estado.get("modo_dedos") else ""))
+    fu = snap.get("fusion")
+    if fu and fu.get("n_camaras", 1) > 1:
+        b_lin.append(f"Camaras: {fu['estado']}")
+        des = " ".join(f"{'IZQ' if l == 'L' else 'DER'} {g:3.0f} deg" for l, g in sorted(fu["desacuerdo"].items()))
+        b_lin.append(f"Fusion {fu.get('modo', '')} {'+'.join(fu['activas']) or '--'}"
+                     + (f" | desacuerdo entre camaras: {des}" if des else "")
+                     + "".join(f" | {c}: izq/der corregido" for c in fu.get("cruzadas", [])))
+    if fu:
+        b_lin += fu.get("avisos", [])
+    b_lin.append(f"Operador: {LONGITUDES.texto()}")
+    for lado in ("L", "R"):
+        nombre = "IZQ" if lado == "L" else "DER"
+        mano = aperturas.get(lado)
+        if mano:
+            extra = f" | mano {mano['apertura'] * 100:3.0f}%"
+            if mano.get("bruto") is not None:
+                extra += f" (bruto {mano['bruto']:.2f})"
+            if mano.get("fuente_mano"):
+                extra += f" {mano['fuente_mano']}"
+            if mano.get("calidad") is not None:
+                extra += f" cal {mano['calidad']:.2f}"
+        else:
+            extra = " | mano no vista"
+        a_lin.append(f"Operador {nombre}: "
+                     f"{brazos[lado]['fuente'] if lado in brazos else 'no detectado'}{extra}")
+    for lado in ("L", "R"):
+        if lado in estado["errores"]:
+            ec, em, eo = estado["errores"][lado]
+            a_lin.append(f"Robot {lado}: error codo {ec * 1000:3.0f} mm | muneca {em * 1000:3.0f} mm | "
+                         f"palma {np.degrees(eo):3.0f} deg"
+                         + (" | orientacion: " + estado["orient"][lado] if estado["orient"].get(lado) else ""))
+    if estado.get("escena"):
+        b_lin.append(estado["escena"])
+    if estado["mensaje"]:
+        a_lin.append(estado["mensaje"])
+    a_roj += [f"Robot {'IZQ' if lado == 'L' else 'DER'} QUIETO: {motivo}"
+              for lado, motivo in sorted(estado.get("congelado", {}).items())]
+    b_roj += [f"! {r}" for r in estado.get("requisitos", [])]
+    if not dos_ventanas:
+        return {"A": (a_lin + b_lin, a_roj + b_roj), "B": ([], [])}
+    return {"A": (a_lin, a_roj), "B": (b_lin, b_roj)}
+
+
+def pintar_textos(img, lineas, rojas, y0=22):
+    """Lineas blancas y luego las rojas (partidas al ancho de la imagen), de arriba abajo."""
+    w = img.shape[1]
+    y = y0
+    for s in lineas:
+        texto(img, s, (10, y))
+        y += 22
+    for r in rojas:
+        for s in partir(r, w - 20):
+            texto(img, s, (10, y), (0, 0, 255))
+            y += 22
+
+
+def componer_vista(snap, estado, textos=None):
     from seguimiento_manos import dibujar_manos
     img = snap["bgr"].copy()
     lm2d, brazos, depth = snap["lm2d"], snap["brazos"], snap["depth"]
@@ -263,54 +333,9 @@ def componer_vista(snap, estado):
         texto(img, f"mano {etiqueta} {'--' if a is None else f'{a * 100:3.0f}%'}",
               (x0, y0 - 4), escala=0.42)
 
-    lineas = [f"Camara {estado.get('fps_cam', 0.0):3.0f} fps | seguimiento {estado['fps_seg']:4.1f} fps | robot {estado['fps_control']:3.0f} Hz | "
-              f"{'PAUSA' if estado['pausado'] else 'TELEOP'} | {'espejo' if estado['espejo'] else 'directo'} | "
-              f"{'calibrado' if estado['calibrado'] else 'sin calibrar'}"
-              + (f" | dedos: {estado['modo_dedos']}" if estado.get("modo_dedos") else "")]
-    fu = snap.get("fusion")
-    varias = bool(fu) and fu.get("n_camaras", 1) > 1
-    if varias:
-        lineas.append(f"Camaras: {fu['estado']}")
-        des = " ".join(f"{'IZQ' if l == 'L' else 'DER'} {g:3.0f} deg" for l, g in sorted(fu["desacuerdo"].items()))
-        lineas.append(f"Fusion {fu.get('modo', '')} {'+'.join(fu['activas']) or '--'}"
-                      + (f" | desacuerdo entre camaras: {des}" if des else "")
-                      + "".join(f" | {c}: izq/der corregido" for c in fu.get("cruzadas", [])))
-    if fu:
-        lineas += fu.get("avisos", [])
-    lineas.append(f"Operador: {LONGITUDES.texto()}")
-    for lado in ("L", "R"):
-        nombre = "IZQ" if lado == "L" else "DER"
-        mano = snap["aperturas"].get(lado)
-        if mano:
-            extra = f" | mano {mano['apertura'] * 100:3.0f}%"
-            if mano.get("bruto") is not None:
-                extra += f" (bruto {mano['bruto']:.2f})"
-            if mano.get("fuente_mano"):
-                extra += f" {mano['fuente_mano']}"
-            if mano.get("calidad") is not None:
-                extra += f" cal {mano['calidad']:.2f}"
-        else:
-            extra = " | mano no vista"
-        lineas.append(f"Operador {nombre}: "
-                      f"{brazos[lado]['fuente'] if lado in brazos else 'no detectado'}{extra}")
-    for lado in ("L", "R"):
-        if lado in estado["errores"]:
-            ec, em, eo = estado["errores"][lado]
-            lineas.append(f"Robot {lado}: error codo {ec * 1000:3.0f} mm | muneca {em * 1000:3.0f} mm | "
-                          f"palma {np.degrees(eo):3.0f} deg"
-                          + (" | orientacion: " + estado["orient"][lado] if estado["orient"].get(lado) else ""))
-    if estado.get("escena"):
-        lineas.append(estado["escena"])
-    if estado["mensaje"]:
-        lineas.append(estado["mensaje"])
-    for k, s in enumerate(lineas):
-        texto(img, s, (10, 22 + 22 * k))
-    rojas = [f"Robot {'IZQ' if lado == 'L' else 'DER'} QUIETO: {motivo}"
-             for lado, motivo in sorted(estado.get("congelado", {}).items())]
-    for r in estado.get("requisitos", []):
-        rojas += partir(f"! {r}", w - 20)
-    for k, s in enumerate(rojas):
-        texto(img, s, (10, 22 + 22 * (len(lineas) + k)), (0, 0, 255))
+    if textos is None:      # una sola camara: todo en esta ventana
+        textos = textos_hud(snap, estado, dos_ventanas=False)["A"]
+    pintar_textos(img, *textos)
     texto(img, "q salir | p pausa | c calibrar | r reposo | m espejo | g dedos | v vista | 1 tuberias",
           (10, h - 12), escala=0.42)
     return img
@@ -326,7 +351,7 @@ def vista_fluida(hilo, snap):
     return v
 
 
-def componer_vista_secundaria(snap, fps_cam, fps):
+def componer_vista_secundaria(snap, fps_cam, fps, textos=None):
     from seguimiento_manos import dibujar_manos
     img = snap["bgr"].copy()
     dibujar_esqueleto(img, snap["lm2d"])
@@ -334,6 +359,8 @@ def componer_vista_secundaria(snap, fps_cam, fps):
     img = cv2.flip(img, 1)
     vistos = " ".join(f"{'IZQ' if l == 'L' else 'DER'}" for l in sorted(snap["brazos"])) or "nadie"
     texto(img, f"Camara B {fps_cam:3.0f} fps | seguimiento {fps:4.1f} fps | brazos vistos: {vistos}", (10, 22))
+    if textos is not None:
+        pintar_textos(img, *textos, y0=44)
     return img
 
 
@@ -830,7 +857,8 @@ def main():
                     fu_v = snap.get("fusion")
                     base_es_a = (not fu_v) or fu_v["activas"][:1] in ([], ["A"])
                     vista = vista_fluida(hilos[0], snap) if base_es_a else snap
-                    cv2.imshow(VENTANA, componer_vista(vista, estado))
+                    textos = textos_hud(snap, estado, dos_ventanas=len(hilos) > 1)
+                    cv2.imshow(VENTANA, componer_vista(vista, estado, textos["A"]))
                 elif toca2:
                     n_mostrado2 = crudo1["n"]
                     t_ventana2 = t0
@@ -843,7 +871,9 @@ def main():
                         t_aviso_negra = t0
                         print("[camara B] llegan fotogramas completamente NEGROS: revisa el cable USB / "
                               "que no la use otro programa")
-                    cv2.imshow(VENTANA2, componer_vista_secundaria(snap_b, hilos[1].fps_camara, hilos[1].fps))
+                    textos = textos_hud(snap, estado)
+                    cv2.imshow(VENTANA2, componer_vista_secundaria(snap_b, hilos[1].fps_camara, hilos[1].fps,
+                                                                   textos["B"]))
 
                 tecla = cv2.waitKey(1) & 0xFF
                 perfil["ventanas"] = perfil.get("ventanas", 0.0) + time.perf_counter() - t_s
