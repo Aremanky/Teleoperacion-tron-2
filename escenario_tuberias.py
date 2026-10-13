@@ -2,8 +2,8 @@
 Escenario de montaje de tuberias de PVC para el TRON 2.
 
   - Techo con una red de tuberias ya instalada, colgada con varillas y abrazaderas.
-  - Una de esas tuberias termina en un extremo libre al alcance del robot, marcado
-    con un anillo: es el PUNTO DE CONEXION.
+  - La red va por DETRAS del robot; solo un tramo llega por delante y termina en un
+    extremo libre al alcance del robot, marcado con un anillo: es el PUNTO DE CONEXION.
   - En un banco de trabajo A LA DERECHA del robot hay una pieza suelta (el taladro,
     o un tramo con codo de 90 grados y una copa (manguito) en cada extremo).
 
@@ -31,6 +31,10 @@ CAMBIOS (oct-2026, mesa):
     y la almohadilla de fieltro son UNA malla cada uno: con piezas solapadas en el mismo
     plano MuJoCo no sabia cual pintar delante y la textura parpadeaba y salia cortada.
   - Cada geom de la mesa lleva rgba explicito: el <default> del robot es semitransparente.
+  - La red de tuberias va por DETRAS del robot (solo el tramo de conexion queda delante).
+  - Techo continuo (un plano que solo se ve desde abajo, para no tapar la camara del visor).
+    Con la columna, a Z_TECHO = 1.85 m, al alcance para taladrarlo; con el KUKA, a
+    Z_TECHO_KUKA = 2.60 m, y es el KUKA el que sube al robot hasta el (flechas y +/-).
 """
 import os
 import xml.etree.ElementTree as ET
@@ -45,21 +49,38 @@ LARGO_COPA = 0.045
 SOLAPE = 0.030          # cuanto entra el tubo del techo dentro de la copa al encajar
 L1, L2 = 0.25, 0.22     # largo de los dos tramos de la pieza suelta, desde el codo
 
-Z_TECHO = 2.25
+# Altura del techo segun el soporte del robot:
+#  - columna (soporte por defecto): AL ALCANCE del robot, para taladrarlo con el brazo
+#    levantado. Al arrancar se imprime hasta que altura llega la mano: si no llega, baja Z_TECHO.
+#  - KUKA: alto, para que el KUKA no lo atraviese; para taladrarlo, el KUKA sube al robot
+#    (flechas y +/- en el teleop). El KUKA no deja subir mas alla del techo.
+Z_TECHO = 1.85
+Z_TECHO_KUKA = 2.60
+z_techo = Z_TECHO          # el que se usa: lo fija anadir_al_modelo() segun el soporte
+# Extension del techo (x0, x1, y0, y1): UNA placa continua, tambien por encima del robot y
+# del KUKA. Es un plano que mira hacia abajo: desde abajo se ve solido, pero desde arriba
+# MuJoCo no lo dibuja, asi que no tapa la camara del visor.
+TECHO_EXTENSION = (-3.20, 1.20, -2.20, 2.20)
 
 # Extremo libre del tubo del techo: punto y direccion hacia fuera del tubo
 CONEXION_PUNTO = np.array([0.42, 0.05, 1.55])
 CONEXION_EJE = np.array([0.0, -1.0, 0.0])
 
 # Red ya instalada: (desde, hasta, radio). La primera acaba en el punto de conexion.
+# La red va POR DETRAS del robot (x negativa). Solo el tramo de conexion queda delante, al
+# alcance de la mano: sale hacia la izquierda del robot y desde ahi corre hacia atras.
+# Detras del robot esta el KUKA (base en x = -2.00, y = 0, ver montar_kuka.py): las tuberias
+# dejan libre ese pasillo (|y| < 0.6) salvo la transversal, que cruza por detras de su base.
 TUBOS_TECHO = [
-    ((0.42, 0.05, 1.55), (0.42, 1.60, 1.55), R_TUBO),
-    ((0.42, 1.60, 1.55), (2.40, 1.60, 1.55), R_TUBO),
-    ((0.85, -2.00, 1.85), (0.85, 2.00, 1.85), R_TUBO),
-    ((0.30, -1.20, 1.95), (2.40, -1.20, 1.95), 0.032),
+    ((0.42, 0.05, 1.55), (0.42, 0.80, 1.55), R_TUBO),      # tramo de conexion (al alcance)
+    ((0.42, 0.80, 1.55), (-3.00, 0.80, 1.55), R_TUBO),     # sigue hacia atras por la izquierda
+    ((-2.85, -2.00, 1.68), (-2.85, 2.00, 1.68), R_TUBO),   # transversal, detras del KUKA
+    ((-0.15, -1.20, 1.74), (-3.00, -1.20, 1.74), 0.032),   # gruesa, por la derecha
 ]
-CODOS_TECHO = [((0.42, 1.60, 1.55), R_TUBO)]
+CODOS_TECHO = [((0.42, 0.80, 1.55), R_TUBO)]
 SEPARACION_SOPORTES = 0.60
+
+HOLGURA_KUKA = 0.05     # m: aviso al arrancar si una tuberia pasa mas cerca del KUKA
 
 # ---------------- MESA (banco de trabajo a la DERECHA del robot) -----------------
 MESA_CENTRO = (0.15, -0.62)      # x, y del centro (antes 0.8, -0.22: delante del robot)
@@ -650,7 +671,11 @@ def _anadir_mesa(root, geom):
 
 def anadir_al_modelo(root):
     """Anade el escenario al arbol XML del robot (se llama al cargar el modelo)."""
+    global z_techo
     mundo = root.find("worldbody")
+    # con el KUKA (montar_kuka.py lo monta antes que el escenario) el techo va alto
+    hay_kuka = any(b.get("name") == "kuka_soporte" for b in root.iter("body"))
+    z_techo = Z_TECHO_KUKA if hay_kuka else Z_TECHO
     base = {"contype": "0", "conaffinity": "0", "group": str(GRUPO_ESCENARIO)}
 
     def geom(padre, **kw):
@@ -658,9 +683,11 @@ def anadir_al_modelo(root):
         atr.update({k: (v if isinstance(v, str) else _f(np.atleast_1d(v))) for k, v in kw.items()})
         return ET.SubElement(padre, "geom", atr)
 
-    # techo (solo por delante del robot, para no tapar la camara del visor)
-    geom(mundo, name="techo", type="box", pos=(1.30, 0.0, Z_TECHO + 0.03),
-         size=(1.15, 2.20, 0.03), rgba=TECHO)
+    # techo: un plano girado 180 grados (su cara visible mira hacia abajo, al robot).
+    # MuJoCo solo dibuja los planos por su cara visible: desde arriba no tapa la camara.
+    x0, x1, y0, y1 = TECHO_EXTENSION
+    geom(mundo, name="techo", type="plane", pos=((x0 + x1) / 2, (y0 + y1) / 2, z_techo),
+         quat="0 1 0 0", size=((x1 - x0) / 2, (y1 - y0) / 2, 0.1), rgba=TECHO)
 
     # red instalada, con varillas roscadas y abrazaderas naranjas
     for i, (a, b, r) in enumerate(TUBOS_TECHO):
@@ -671,7 +698,7 @@ def anadir_al_modelo(root):
         n = max(1, int(largo // SEPARACION_SOPORTES))
         for k in range(n):
             c = a + eje * (largo * (k + 0.5) / n)
-            geom(mundo, type="cylinder", fromto=np.r_[c + [0, 0, r], [c[0], c[1], Z_TECHO]],
+            geom(mundo, type="cylinder", fromto=np.r_[c + [0, 0, r], [c[0], c[1], z_techo]],
                  size=0.004, rgba=VARILLA)
             geom(mundo, type="cylinder", fromto=np.r_[c - eje * 0.012, c + eje * 0.012],
                  size=r + 0.006, rgba=ABRAZADERA)
@@ -747,6 +774,9 @@ class EscenarioTuberias:
         self.rgba_pieza = m.geom_rgba[self.g_pieza].copy()
         self._informar_malla()
         self._comprobar_alcance(robot)
+        self._comprobar_kuka()
+        # el KUKA no puede subir al robot mas alla del techo (solo con el escenario a la vista)
+        self.kuka = getattr(robot, "kuka", None)
         self.activa = False             # oculto y sin efecto hasta que se active
         self.reiniciar()
 
@@ -773,6 +803,52 @@ class EscenarioTuberias:
         if r > 0.92:
             print(f"[aviso] la pieza queda casi al limite del brazo {nombre}: acerca la mesa "
                   f"(sube MESA_CENTRO[1] hacia 0) o sube PIEZA_EN_MESA[1]")
+        # techo: hasta donde sube la muneca con el brazo hacia arriba (el seguimiento comprime
+        # el brazo a partir del 92 % de su alcance), mas la mano
+        muneca_max = float(hombro[2]) + 0.92 * alcance
+        if getattr(robot, "kuka", None) is not None:
+            print(f"Techo a {z_techo:.2f} m (soporte KUKA): para llegar, sube al robot con + "
+                  f"(ahora la muneca {nombre} llega a ~{muneca_max:.2f} m)")
+            return
+        print(f"Techo a {z_techo:.2f} m | la muneca {nombre} sube hasta ~{muneca_max:.2f} m "
+              f"(hombro a {hombro[2]:.2f} m)")
+        if muneca_max < z_techo - 0.25:
+            print(f"[aviso] el techo queda alto para taladrarlo: con la mano y el taladro "
+                  f"(~25 cm) no se llega. Baja Z_TECHO a ~{muneca_max + 0.15:.2f} m")
+
+    def _comprobar_kuka(self, prefijo="kuka_"):
+        """Avisa si alguna tuberia del techo pasa a menos de HOLGURA_KUKA del KUKA (con los
+        vertices reales de sus mallas). Si no hay KUKA en el modelo, no hace nada."""
+        m = self.m
+        geoms = [g for g in range(m.ngeom) if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH
+                 and (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, int(m.geom_bodyid[g])) or "")
+                 .startswith(prefijo)]
+        if not geoms:
+            return
+        d = mujoco.MjData(m)
+        mujoco.mj_kinematics(m, d)
+        puntos = []
+        for g in geoms:
+            mid = int(m.geom_dataid[g])
+            v = m.mesh_vert[m.mesh_vertadr[mid]:m.mesh_vertadr[mid] + m.mesh_vertnum[mid]]
+            puntos.append(v[::4] @ d.geom_xmat[g].reshape(3, 3).T + d.geom_xpos[g])
+        P = np.vstack(puntos)
+        problemas = []
+        for i, (a, b, r) in enumerate(TUBOS_TECHO):
+            a, b = np.array(a, float), np.array(b, float)
+            ab = b - a
+            t = np.clip((P - a) @ ab / (ab @ ab), 0.0, 1.0)
+            dist = float(np.min(np.linalg.norm(P - (a + t[:, None] * ab), axis=1))) - r
+            if dist < HOLGURA_KUKA:
+                problemas.append(f"tuberia {i} a {dist * 100:.0f} cm")
+        techo_z = float(P[:, 2].max())
+        if techo_z > z_techo - 0.01:
+            problemas.append(f"el KUKA atraviesa el techo (llega a z = {techo_z:.2f} m)")
+        if problemas:
+            print(f"[aviso] el KUKA choca con el escenario: {', '.join(problemas)}")
+        else:
+            print(f"Red del techo libre del KUKA (holgura >= {HOLGURA_KUKA * 100:.0f} cm; "
+                  f"el KUKA llega hasta z = {techo_z:.2f} m)")
 
     def _informar_malla(self):
         """Con un modelo propio, imprime la caja que ocupa tal y como la ha cargado
@@ -795,6 +871,10 @@ class EscenarioTuberias:
         """Muestra el escenario (o lo reinicia si ya estaba a la vista)."""
         self.activa = True
         self.reiniciar()
+        if self.kuka is not None and getattr(self.kuka, "disponible", False):
+            self.kuka.techo = z_techo
+            if self.kuka.z_max() > z_techo:
+                print(f"[aviso] el KUKA ya esta por encima del techo ({z_techo:.2f} m): bajalo con -")
         if visor is not None:
             with visor.lock():
                 visor.opt.geomgroup[GRUPO_ESCENARIO] = 1

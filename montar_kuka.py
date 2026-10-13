@@ -22,11 +22,19 @@ BRIDA
   + BRIDA_OFFSET y "mirar hacia arriba" es poner el eje x de link_6 en la vertical del torso.
 
 COMO QUEDA MONTADO
-  - El torso (base_Link) se queda EXACTAMENTE donde estaba (0, 0, 1.21): mesa, tuberias,
-    calibracion de camaras e IK de los brazos siguen valiendo.
+  - Al arrancar, el torso (base_Link) queda EXACTAMENTE donde estaba (0, 0, 1.21): mesa,
+    tuberias y calibracion de camaras siguen valiendo. Despues se puede desplazar (KUKA MOVIL).
   - El KUKA es un arbol aparte bajo <worldbody>, CONGELADO en una postura (sin juntas, sin
     masa, sin colisiones). La postura sale de una IK: la brida queda en ANCLAJE_TORSO, debajo
     del torso, mirando hacia arriba, con la base del KUKA en BASE_KUKA_POS.
+
+KUKA MOVIL (oct-2026, ControlKuka)
+  En marcha, el teleop puede DESPLAZAR al robot con el KUKA (flechas y +/-): el torso se
+  traslada, nunca gira, y los eslabones del KUKA se recolocan con la misma IK de arriba,
+  partiendo de la postura anterior. Sigue sin haber juntas: se escriben m.body_pos y
+  m.body_quat de los cuerpos del KUKA y del torso, asi que nq no cambia y las grabaciones
+  siguen valiendo. Se rechaza un movimiento si la IK no llega, si se sale de LIMITES_DESPLAZ
+  o si el KUKA o la cabeza del robot pasarian del techo del escenario (ControlKuka.techo).
 
 Prueba rapida (genera el modelo y abre el visor):
     python montar_kuka.py
@@ -50,7 +58,11 @@ CUERPO_TORSO = "base_Link"
 # Punto del torso (en sus coordenadas) donde apoya la brida: donde empezaba la columna
 ANCLAJE_TORSO = np.array([0.00056, -0.00009, -0.07285])
 # Base del KUKA en el mundo (x delante del robot, y a su izquierda, z arriba).
-BASE_KUKA_POS = np.array([-1.40, 0.0, 0.0])
+# (oct-2026) -1.40 -> -2.00: con la brida hacia arriba bajo el torso y la base tan cerca, el KUKA
+# quedaba tan plegado que su muneca (a5) tenia que doblar ~130 grados y su limite es 125: la brida
+# no llegaba (17 mm, 4 grados de error) y el KUKA movil no podia moverse. Mas lejos, el antebrazo
+# va mas horizontal y a5 queda dentro de su rango.
+BASE_KUKA_POS = np.array([-2.00, 0.0, 0.0])
 BASE_KUKA_YAW_DEG = 0.0                # 0 = el KUKA mira hacia +x (hacia donde mira el TRON)
 # Postura de partida de la IK (a1..a6, grados): brazo hacia delante y muneca hacia arriba
 SEMILLA_DEG = (0.0, 0.0, -20.0, 0.0, -70.0, 0.0)
@@ -70,6 +82,17 @@ SOLAPE = 0.003                         # m que la brida "entra" en el torso para
 COLORES = "dae"
 PREFIJO = "kuka_"                      # para no chocar con nombres del TRON (base_link/base_Link)
 COLOR_POR_DEFECTO = "0.95 0.42 0.0 1"  # si una malla no trae color
+
+# ------------------------------- KUKA movil ------------------------------------
+PASO_KUKA = 0.02                       # m que se desplaza el torso por pulsacion
+# Recorrido permitido del torso respecto a su sitio de partida (m, ejes del mundo):
+# (x atras, x delante), (y derecha, y izquierda), (z abajo, z arriba)
+LIMITES_DESPLAZ = ((-0.60, 0.80), (-0.80, 0.80), (-0.50, 1.20))
+ITER_IK_MOVIL = 80                     # iteraciones de la IK al mover (parte de la postura actual)
+SALTO_MAX_JUNTA = 0.5                  # rad: un paso que gire mas una junta del KUKA se rechaza
+HOLGURA_TECHO = 0.03                   # m que el KUKA y la cabeza del robot dejan bajo el techo
+
+_MONTAJE = None   # lo rellena montar(): lo que necesita ControlKuka para mover el KUKA en marcha
 
 
 # ------------------------------- utilidades ------------------------------------
@@ -299,21 +322,24 @@ def _contacto(objs_link, anclaje_torso):
     return offset, anclaje
 
 
-def _postura(m, b, offset, p_obj, R_obj):
+def _postura(m, b, offset, p_obj, R_obj, semillas=None, iteraciones=400):
     """IK (minimos cuadrados amortiguados, varias semillas): lleva el punto 'offset' del
     cuerpo b a p_obj con la orientacion R_obj (marco de la base del KUKA).
+    semillas: posturas de partida (None = SEMILLA_DEG + 40 al azar, para el montaje; al mover
+    en marcha se pasa solo la postura actual, que esta muy cerca de la solucion).
     Devuelve (q, error pos [m], error ang [rad])."""
     d = mujoco.MjData(m)
     lo, hi = m.jnt_range[:, 0], m.jnt_range[:, 1]
     lim = m.jnt_limited.astype(bool)
-    rng = np.random.default_rng(0)
-    semillas = [np.radians(SEMILLA_DEG[:m.nq])]
-    semillas += [np.where(lim, rng.uniform(lo, hi), rng.uniform(-np.pi, np.pi, m.nq)) for _ in range(40)]
+    if semillas is None:
+        rng = np.random.default_rng(0)
+        semillas = [np.radians(SEMILLA_DEG[:m.nq])]
+        semillas += [np.where(lim, rng.uniform(lo, hi), rng.uniform(-np.pi, np.pi, m.nq)) for _ in range(40)]
     jacp, jacr = np.zeros((3, m.nv)), np.zeros((3, m.nv))
     mejor = (np.inf, None, np.inf, np.inf)
     for q in semillas:
         q = np.array(q, dtype=float)
-        for _ in range(400):
+        for _ in range(iteraciones):
             d.qpos[:] = q
             mujoco.mj_kinematics(m, d)
             mujoco.mj_comPos(m, d)
@@ -377,11 +403,15 @@ def montar(root):
     print(f"[kuka] postura a1..a6 (deg): {np.round(np.degrees(q), 1)} | "
           f"error brida {ep * 1000:.1f} mm, {np.degrees(er):.2f} deg")
     if ep > TOL_POS or np.degrees(er) > 1.0:
-        print("[kuka] AVISO: el KUKA no llega bien al torso desde BASE_KUKA_POS. "
-              "Acerca la base o cambia SEMILLA_DEG.")
+        print("[kuka] AVISO: el KUKA no llega bien al torso desde BASE_KUKA_POS. Si alguna junta "
+              "esta en su limite (a5 = +-125: KUKA demasiado plegado), ALEJA la base (x mas negativa).")
     d = mujoco.MjData(m)
     d.qpos[:] = q
     mujoco.mj_kinematics(m, d)
+    global _MONTAJE                     # para ControlKuka (mover el KUKA en marcha)
+    _MONTAJE = dict(m=m, b=b, offset=np.array(offset, dtype=float), R_b=R_b, p_b=p_b,
+                    R_brida=R_brida, anclaje=np.array(anclaje, dtype=float), q=np.array(q, dtype=float),
+                    ep=float(ep), er=float(er))
 
     # 4) mallas del KUKA
     asset = root.find("asset")
@@ -422,6 +452,128 @@ def montar(root):
         destino = ET.SubElement(soporte, "body", {"name": PREFIJO + nombre, "pos": _f(d.xpos[i]),
                                                   "quat": _f(d.xquat[i])})
         copiar_geoms(cuerpo, destino)
+
+
+class ControlKuka:
+    """Mueve el KUKA en marcha: traslada el torso del TRON 2 (sin girarlo nunca) y recoloca los
+    eslabones del KUKA con una IK. No anade juntas (nq no cambia): el KUKA y el torso son
+    cuerpos sin juntas y se mueven escribiendo m.body_pos / m.body_quat.
+    techo: altura (m) que no deben pasar el KUKA ni la cabeza del robot (la fija el escenario)."""
+
+    def __init__(self, m, d):
+        if _MONTAJE is None:
+            raise RuntimeError("ControlKuka necesita que montar() haya montado antes el KUKA")
+        M = _MONTAJE
+        self.m, self.d = m, d
+        self.mk = M["m"]
+        self.dk = mujoco.MjData(self.mk)
+        self.b, self.offset = M["b"], M["offset"]
+        self.R_b, self.p_b, self.R_brida = M["R_b"], M["p_b"], M["R_brida"]
+        self.anclaje0, self.q = M["anclaje"].copy(), M["q"].copy()
+        self.ep, self.er = M["ep"], M["er"]    # error de la brida en la postura actual (m, rad)
+        self.desplaz = np.zeros(3)          # cuanto se ha trasladado el torso desde el arranque
+        self.techo = None
+        CUERPO = mujoco.mjtObj.mjOBJ_BODY
+        self.torso = mujoco.mj_name2id(m, CUERPO, CUERPO_TORSO)
+        # pares (cuerpo del modelo del KUKA, cuerpo del modelo completo)
+        self.pares = []
+        for i in range(1, self.mk.nbody):
+            j = mujoco.mj_name2id(m, CUERPO, PREFIJO + (mujoco.mj_id2name(self.mk, CUERPO, i) or ""))
+            if j >= 0:
+                self.pares.append((i, j))
+        self.disponible = self.torso >= 0 and int(m.body_parentid[self.torso]) == 0 and bool(self.pares)
+        if not self.disponible:
+            print("[kuka] AVISO: no encuentro los cuerpos del KUKA o del torso en el modelo "
+                  "compilado: el KUKA no se podra mover")
+            return
+        self.pos_torso0 = m.body_pos[self.torso].copy()
+        self._vigilados = self._preparar_vigilados()
+
+    # ---------------- comprobaciones ----------------
+    def _preparar_vigilados(self):
+        """Geoms que no deben pasar del techo: los del KUKA, el torso y la cabeza del robot.
+        Con mallas, una muestra de sus vertices (coordenadas del geom); si no, su radio."""
+        m = self.m
+        CUERPO = mujoco.mjtObj.mjOBJ_BODY
+        cuerpos = {j for _, j in self.pares} | {self.torso}
+        cuerpos |= {b for b in range(m.nbody) if "head" in (mujoco.mj_id2name(m, CUERPO, b) or "").lower()}
+        vig = []
+        for g in range(m.ngeom):
+            if int(m.geom_bodyid[g]) not in cuerpos:
+                continue
+            if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH and m.geom_dataid[g] >= 0:
+                mid = int(m.geom_dataid[g])
+                a, n = int(m.mesh_vertadr[mid]), int(m.mesh_vertnum[mid])
+                vig.append((g, m.mesh_vert[a:a + n][::max(1, n // 400)].copy(), 0.0))
+            else:
+                vig.append((g, np.zeros((1, 3)), float(m.geom_rbound[g])))
+        return vig
+
+    def z_max(self):
+        """Altura del punto mas alto del KUKA, el torso y la cabeza (con la cinematica actual)."""
+        z = -np.inf
+        for g, v, r in self._vigilados:
+            R = self.d.geom_xmat[g].reshape(3, 3)
+            z = max(z, float((v @ R.T)[:, 2].max() + self.d.geom_xpos[g][2] + r))
+        return z
+
+    # ---------------- movimiento ----------------
+    def _aplicar(self, q, desplaz):
+        """Coloca los eslabones del KUKA en la postura q y el torso desplazado 'desplaz'."""
+        self.dk.qpos[:] = q
+        mujoco.mj_kinematics(self.mk, self.dk)
+        for i, j in self.pares:      # el padre de los cuerpos del KUKA es kuka_soporte = su base
+            self.m.body_pos[j] = self.dk.xpos[i]
+            self.m.body_quat[j] = self.dk.xquat[i]
+        self.m.body_pos[self.torso] = self.pos_torso0 + desplaz
+        mujoco.mj_kinematics(self.m, self.d)
+        mujoco.mj_comPos(self.m, self.d)
+
+    def mover(self, delta):
+        """Desplaza el torso 'delta' (m, ejes del mundo) sin girarlo. Devuelve (ok, mensaje)."""
+        if not self.disponible:
+            return False, "KUKA: no se puede mover en este modelo"
+        lim = np.array(LIMITES_DESPLAZ, dtype=float)
+        nuevo = np.clip(self.desplaz + np.asarray(delta, dtype=float), lim[:, 0], lim[:, 1])
+        if np.allclose(nuevo, self.desplaz):
+            return False, "KUKA: fin del recorrido permitido (LIMITES_DESPLAZ)"
+        p_obj = self.R_b.T @ (self.anclaje0 + nuevo - self.p_b)
+        q, ep, er = _postura(self.mk, self.b, self.offset, p_obj, self.R_b.T @ self.R_brida,
+                             semillas=[self.q], iteraciones=ITER_IK_MOVIL)
+        # Se acepta si la brida llega (TOL_POS, 1 grado) o, si ya arrancaba con algo de error,
+        # si no empeora: asi se puede mover aunque el montaje no fuera perfecto, y se frena justo
+        # donde el KUKA empieza a no llegar (p.ej. muneca en su limite al bajar).
+        tol_p = max(TOL_POS, self.ep + 0.001)
+        tol_a = max(np.radians(1.0), self.er + np.radians(0.2))
+        if ep > tol_p or er > tol_a:
+            return False, (f"KUKA: no llega ahi (error de la brida {ep * 1000:.0f} mm, "
+                           f"{np.degrees(er):.1f} deg)")
+        if np.abs(q - self.q).max() > SALTO_MAX_JUNTA:
+            return False, "KUKA: ese paso le obliga a cambiar de postura de golpe"
+        self._aplicar(q, nuevo)
+        if self.techo is not None and self.z_max() > self.techo - HOLGURA_TECHO:
+            self._aplicar(self.q, self.desplaz)          # se deshace
+            return False, "KUKA: tocaria el techo"
+        self.q, self.desplaz, self.ep, self.er = q, nuevo, ep, er
+        return True, self.texto()
+
+    def ir_a(self, desplaz):
+        """Lleva el torso al desplazamiento dado en pasos de PASO_KUKA (reproduccion de sesiones)."""
+        objetivo = np.asarray(desplaz, dtype=float)
+        for _ in range(500):
+            falta = objetivo - self.desplaz
+            n = float(np.linalg.norm(falta))
+            if n < 1e-6:
+                return True
+            ok, _ = self.mover(falta if n <= PASO_KUKA else falta * (PASO_KUKA / n))
+            if not ok:
+                return False
+        return False
+
+    def texto(self):
+        x, y, z = self.desplaz * 100
+        return (f"KUKA: torso desplazado x {x:+.0f} | y {y:+.0f} | z {z:+.0f} cm  (flechas y +/-)"
+                + (f" | brida a {self.ep * 1000:.0f} mm" if self.ep > TOL_POS else ""))
 
 
 def con_kuka(escenario=None):

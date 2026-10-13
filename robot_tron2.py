@@ -48,6 +48,13 @@ CAMBIOS (oct-2026, movimiento natural):
      ultimos T_ATASCO s (DetectorAtasco). Y el rescate se compara con la postura actual usando la
      MISMA medida (posicion + limite anatomico); antes se comparaba una medida con penalizacion
      anatomica contra otra sin ella y se podian rechazar rescates buenos.
+
+CAMBIOS (oct-2026, KUKA movil):
+  - Con el soporte KUKA, el KUKA puede DESPLAZAR al robot en marcha (flechas y +/- en el
+    teleop; ver montar_kuka.ControlKuka, en RobotTron2.kuka). El torso se traslada pero no
+    gira nunca, asi que R_base y todo lo que se mide como direccion siguen valiendo.
+  - Brazo.hombro ya no es un punto fijo del mundo medido al arrancar: se guarda en
+    coordenadas del torso y se recalcula al leerlo, asi sigue al torso cuando el KUKA lo mueve.
 """
 import os
 import time
@@ -163,7 +170,6 @@ BLOQUEAR_FLEXION_MUNECA = True
 # Bloquear la desviacion radial/ulnar de la muneca (se queda en 0, la de reposo)
 BLOQUEAR_DESVIACION_MUNECA = True
 SOPORTE_KUKA = os.environ.get("TRON2_SOPORTE", "kuka") == "kuka"   # arranque.sh: kuka | columna
-
 
 def nombre(m, tipo, i):
     return mujoco.mj_id2name(m, tipo, i) or f"<{i}>"
@@ -389,6 +395,19 @@ class Brazo:
             self._limitar_hombro(HOMBRO_HUMANO_DEG)
         self.q_reposo_visual = self._postura_visual()
         self.reposo()
+
+    # ---------------- hombro (sigue al torso) ----------------
+    @property
+    def hombro(self):
+        """Centro del hombro en el mundo. Se guarda en coordenadas del cuerpo raiz de la
+        cadena (el torso) para que siga al torso cuando el KUKA lo desplaza."""
+        R = self.d.xmat[self.raiz].reshape(3, 3)
+        return self.d.xpos[self.raiz] + R @ self._hombro_local
+
+    @hombro.setter
+    def hombro(self, p):
+        R = self.d.xmat[self.raiz].reshape(3, 3)
+        self._hombro_local = R.T @ (np.asarray(p, dtype=float) - self.d.xpos[self.raiz])
 
     def _postura_visual(self):
         """q_reposo con el codo doblado CODO_REPOSO_DEG y el antebrazo abierto hacia fuera
@@ -1060,8 +1079,14 @@ class RobotTron2:
             for brazo in self.brazos.values():
                 brazo.bloquear_muneca(BLOQUEAR_FLEXION_MUNECA, BLOQUEAR_DESVIACION_MUNECA)
         self.actualizar()
-        # Orientacion del torso en el mundo (x delante, y izquierda, z arriba)
+        # Orientacion del torso en el mundo (x delante, y izquierda, z arriba). El KUKA traslada
+        # el torso pero no lo gira nunca: R_base es constante.
         self.R_base = self.d.xmat[self.brazos["L"].raiz].reshape(3, 3).copy()
+        # Control del KUKA (solo con el soporte KUKA): desplaza el torso con IK
+        self.kuka = None
+        if SOPORTE_KUKA:
+            import montar_kuka
+            self.kuka = montar_kuka.ControlKuka(self.m, self.d)
 
     def actualizar(self):
         """Recalcula posiciones para dibujar y para la IK (sin mj_forward: colisiones,

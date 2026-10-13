@@ -38,6 +38,9 @@ Teclas (con la ventana de la camara seleccionada):
   g        dedos: imitacion pura <-> pinzas predefinidas (solo --orca)
   v        ver el robot desde detras / desde delante
   1        escenario de tuberias: la primera vez lo hace aparecer; despues lo reinicia
+  flechas  (solo con el soporte KUKA) desplazar al robot: arriba/abajo = delante/atras del
+           robot, izquierda/derecha = su izquierda/derecha. El robot NO gira nunca
+  + / -    (solo con el soporte KUKA) subir / bajar al robot
 
 Estructura: un hilo por camara lee y ejecuta MediaPipe (~12-25 fps), fusion.py junta las
 camaras y el bucle principal (clase Teleoperador) mueve el robot a 60 Hz suavizando los
@@ -108,6 +111,18 @@ HZ_VISOR = 30.0            # el visor de MuJoCo se refresca a esto
 HZ_VENTANA = 30.0          # ventana de la camara
 HZ_VENTANA2 = 15.0
 HZ_DIBUJO = 60.0           # ritmo maximo del hilo principal (visor + ventanas + teclas)
+
+# Teclas del KUKA. cv2.waitKey() se queda con 8 bits y pierde las flechas: se lee con
+# cv2.waitKeyEx(), que da codigos distintos segun el sistema (GTK en Linux, Windows, Qt).
+# Direccion en el marco del ROBOT (x delante, y su izquierda, z arriba).
+TECLAS_KUKA = {
+    65362: (1, 0, 0), 2490368: (1, 0, 0), 0x1000013: (1, 0, 0),       # flecha arriba: delante
+    65364: (-1, 0, 0), 2621440: (-1, 0, 0), 0x1000015: (-1, 0, 0),    # flecha abajo: atras
+    65361: (0, 1, 0), 2424832: (0, 1, 0), 0x1000012: (0, 1, 0),       # flecha izquierda
+    65363: (0, -1, 0), 2555904: (0, -1, 0), 0x1000014: (0, -1, 0),    # flecha derecha
+    ord("+"): (0, 0, 1), ord("="): (0, 0, 1), 65451: (0, 0, 1),       # + (y su tecla, y el del teclado numerico)
+    ord("-"): (0, 0, -1), 65453: (0, 0, -1),                          # -
+}
 
 COLOR_CODO = [1.0, 0.85, 0.0, 0.8]    # marcador amarillo en MuJoCo
 COLOR_MUNECA = [0.1, 1.0, 0.3, 0.8]   # marcador verde en MuJoCo
@@ -325,6 +340,8 @@ def textos_hud(snap, estado, dos_ventanas=True):
                          + (" | orientacion: " + estado["orient"][lado] if estado["orient"].get(lado) else ""))
     if estado.get("escena"):
         b_lin.append(estado["escena"])
+    if estado.get("kuka"):
+        a_lin.append(estado["kuka"])
     if estado["mensaje"]:
         a_lin.append(estado["mensaje"])
     a_roj += [f"Robot {'IZQ' if lado == 'L' else 'DER'} QUIETO: {motivo}"
@@ -382,7 +399,8 @@ def componer_vista(snap, estado, textos=None):
     if textos is None:      # una sola camara: todo en esta ventana
         textos = textos_hud(snap, estado, dos_ventanas=False)["A"]
     pintar_textos(img, *textos)
-    texto(img, "q salir | p pausa | c calibrar | r reposo | m espejo | g dedos | v vista | 1 tuberias",
+    texto(img, "q salir | p pausa | c calibrar | r reposo | m espejo | g dedos | v vista | 1 tuberias"
+               + (" | flechas +/- KUKA" if estado.get("kuka") else ""),
           (10, h - 12), escala=0.42)
     return img
 
@@ -455,6 +473,8 @@ class Teleoperador:
                            errores={}, mensaje="", pinzas={}, orient={}, congelado={}, modo_dedos="")
         if robot.manos:
             self.estado["modo_dedos"] = "imitacion" if not next(iter(robot.manos.values())).estado["pinza_habilitada"] else "pinzas"
+        kuka = getattr(robot, "kuka", None)
+        self.estado["kuka"] = kuka.texto() if kuka is not None and kuka.disponible else ""
         self.suaves = {}          # lado del robot -> objetivos suavizados {codo, muneca, w, R}
         self.coherencia = {}      # lado del robot -> memoria de la coherencia del codo (objetivos())
         self.calib = None         # CalibracionCamaras en curso (tecla c)
@@ -502,6 +522,9 @@ class Teleoperador:
                 self.reposo()
             elif nombre == "modo_dedos":
                 self.modo_dedos(bool(d["pinzas"]))
+            elif nombre == "kuka" and getattr(self.robot, "kuka", None) is not None:
+                self.robot.kuka.ir_a(d["desplaz"])
+                self.estado["kuka"] = self.robot.kuka.texto()
 
     # ------------------------------------------------------------ acciones (teclas)
     def _reiniciar_objetivos(self):
@@ -520,8 +543,33 @@ class Teleoperador:
             mano.modo_pinza(pinzas)
         self.estado["modo_dedos"] = "pinzas" if pinzas else "imitacion"
 
+    def mover_kuka(self, direccion, t0):
+        """Desplaza al robot con el KUKA un paso en 'direccion' (marco del robot)."""
+        kuka = getattr(self.robot, "kuka", None)
+        if kuka is None or not kuka.disponible:
+            self.estado["mensaje"] = "Sin KUKA: el robot esta en la columna (TRON2_SOPORTE=columna)"
+            self.t_mensaje = t0 + 2.0
+            return
+        import montar_kuka
+        delta = self.robot.R_base @ (np.asarray(direccion, dtype=float) * montar_kuka.PASO_KUKA)
+        ok, mensaje = kuka.mover(delta)
+        self.estado["kuka"] = kuka.texto()
+        if ok:
+            self._evento("kuka", desplaz=kuka.desplaz.tolist())
+        else:
+            self.estado["mensaje"] = mensaje
+            self.t_mensaje = t0 + 2.0
+            print(f"[kuka] {mensaje}")
+
     def tecla(self, tecla, t0, visor=None):
-        """Devuelve True si hay que salir."""
+        """Devuelve True si hay que salir. 'tecla' es el codigo de cv2.waitKeyEx()."""
+        if tecla in TECLAS_KUKA:
+            self.mover_kuka(TECLAS_KUKA[tecla], t0)
+            return False
+        if tecla > 255:            # otra tecla especial (F1, Shift...): no se usa
+            if tecla not in (65505, 65506, 65507, 65508, 65513, 65514):   # (Shift, Ctrl, Alt solos)
+                print(f"[teclas] codigo {tecla} sin asignar (si es una flecha, anadelo a TECLAS_KUKA)")
+            return False
         if tecla in (ord("q"), 27):
             return True
         if tecla == ord("p"):
@@ -991,7 +1039,7 @@ def main():
                     cv2.imshow(VENTANA2, componer_vista_secundaria(snap_b, hilos[1].fps_camara, hilos[1].fps,
                                                                    textos["B"]))
 
-                tecla = cv2.waitKey(1) & 0xFF
+                tecla = cv2.waitKeyEx(1)      # Ex: con waitKey() las flechas no se distinguen
                 perfil["ventanas"] = perfil.get("ventanas", 0.0) + time.perf_counter() - t_s
                 perfil["ciclos"] = perfil.get("ciclos", 0) + 1
                 if t0 - t_perfil > 10.0:
@@ -1004,7 +1052,7 @@ def main():
                               + " | ".join(f"{k} {v_ * 1000 / n_c:.1f} ms" for k, v_ in perfil.items())
                               + f" | camaras {' / '.join(f'{h.fps:.0f}' for h in hilos)} fps")
                     perfil, t_perfil = {}, t0
-                if tecla != 255:
+                if tecla != -1:
                     with control.lock:
                         salir = tele.tecla(tecla, t0, visor=v)
                     if salir:
