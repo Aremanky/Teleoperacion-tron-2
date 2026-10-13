@@ -162,7 +162,7 @@ W_CODO_PLENO = 0.4     # con w_codo >= esto manda el objetivo del codo y la pref
 BLOQUEAR_FLEXION_MUNECA = True
 # Bloquear la desviacion radial/ulnar de la muneca (se queda en 0, la de reposo)
 BLOQUEAR_DESVIACION_MUNECA = True
-SOPORTE_KUKA = True    # False = columna original del DACH_TRON2A
+SOPORTE_KUKA = os.environ.get("TRON2_SOPORTE", "kuka") == "kuka"   # arranque.sh: kuka | columna
 
 
 def nombre(m, tipo, i):
