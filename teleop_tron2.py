@@ -54,6 +54,7 @@ import traceback
 
 import cv2
 import numpy as np
+import decoracion_elecnor
 
 import brazo_geometria
 import escenario_tuberias
@@ -851,7 +852,8 @@ class RelojSimulado:
 
 # ---------------------------------------------------------------- montaje
 def crear_robot(xml, orca, reloj=time.monotonic):
-    robot = RobotTron2(xml, escenario_tuberias.anadir_al_modelo, orca=orca, reloj=reloj)
+    robot = RobotTron2(xml, decoracion_elecnor.con_decoracion(escenario_tuberias.anadir_al_modelo),
+                       orca=orca, reloj=reloj)
     escena = escenario_tuberias.EscenarioTuberias(robot)
     robot.resumen()
     return robot, escena
