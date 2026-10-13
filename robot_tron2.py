@@ -162,6 +162,7 @@ W_CODO_PLENO = 0.4     # con w_codo >= esto manda el objetivo del codo y la pref
 BLOQUEAR_FLEXION_MUNECA = True
 # Bloquear la desviacion radial/ulnar de la muneca (se queda en 0, la de reposo)
 BLOQUEAR_DESVIACION_MUNECA = True
+SOPORTE_KUKA = True    # False = columna original del DACH_TRON2A
 
 
 def nombre(m, tipo, i):
@@ -1030,6 +1031,9 @@ class RobotTron2:
         reloj: funcion que da el tiempo (time.monotonic, o un reloj simulado al reproducir)."""
         self.origen = ruta_xml
         self.reloj = reloj
+        if SOPORTE_KUKA:
+            import montar_kuka
+            escenario = montar_kuka.con_kuka(escenario)
         if orca:
             import mano_orca
 

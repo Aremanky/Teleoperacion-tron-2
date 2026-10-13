@@ -3,6 +3,7 @@
 config.yaml
 **/meshes/*.urdf
 
+.pytest_cache/
 .venv/
 # --- ROS / colcon / catkin build outputs ---
 build/

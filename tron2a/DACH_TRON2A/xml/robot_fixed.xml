@@ -88,7 +88,7 @@
     <texture name="tex_idi" type="2d" file="I+D+I_DENOMIN_GRUPO_RGB.png" />
     <material name="mat_idi" texture="tex_idi" texuniform="false" texrepeat="1 1" specular="0.15" shininess="0.2" reflectance="0" />
     <texture name="tex_cielo" type="skybox" builtin="gradient" width="512" height="512" rgb1="0.000 0.227 0.561" rgb2="0.012 0.027 0.055" />
-  <mesh file="/home/elecnor/Documentos/Teleoperacion-tron-2/taladro/piezas/cuerpo.obj" name="pieza_taladro_cuerpo" /><mesh file="/home/elecnor/Documentos/Teleoperacion-tron-2/taladro/piezas/empunadura.obj" name="pieza_taladro_empunadura" /><mesh file="/home/elecnor/Documentos/Teleoperacion-tron-2/taladro/piezas/bateria.obj" name="pieza_taladro_bateria" /><mesh file="/home/elecnor/Documentos/Teleoperacion-tron-2/taladro/piezas/portabrocas.obj" name="pieza_taladro_portabrocas" /><mesh file="/home/elecnor/Documentos/Teleoperacion-tron-2/taladro/piezas/broca.obj" name="pieza_taladro_broca" /></asset>
+  <mesh name="kuka_base_link_0" content_type="model/obj" file="/home/elecnor/Documentos/Teleoperacion-tron-2/kuka_kr210_support/meshes/kr210l150/visual_mujoco/base_link_0.obj" /><mesh name="kuka_base_link_1" content_type="model/obj" file="/home/elecnor/Documentos/Teleoperacion-tron-2/kuka_kr210_support/meshes/kr210l150/visual_mujoco/base_link_1.obj" /><mesh name="kuka_link_1_0" content_type="model/obj" file="/home/elecnor/Documentos/Teleoperacion-tron-2/kuka_kr210_support/meshes/kr210l150/visual_mujoco/link_1_0.obj" /><mesh name="kuka_link_1_1" content_type="model/obj" file="/home/elecnor/Documentos/Teleoperacion-tron-2/kuka_kr210_support/meshes/kr210l150/visual_mujoco/link_1_1.obj" /><mesh name="kuka_link_2_0" content_type="model/obj" file="/home/elecnor/Documentos/Teleoperacion-tron-2/kuka_kr210_support/meshes/kr210l150/visual_mujoco/link_2_0.obj" /><mesh name="kuka_link_3_0" content_type="model/obj" file="/home/elecnor/Documentos/Teleoperacion-tron-2/kuka_kr210_support/meshes/kr210l150/visual_mujoco/link_3_0.obj" /><mesh name="kuka_link_3_1" content_type="model/obj" file="/home/elecnor/Documentos/Teleoperacion-tron-2/kuka_kr210_support/meshes/kr210l150/visual_mujoco/link_3_1.obj" /><mesh name="kuka_link_4_0" content_type="model/obj" file="/home/elecnor/Documentos/Teleoperacion-tron-2/kuka_kr210_support/meshes/kr210l150/visual_mujoco/link_4_0.obj" /><mesh name="kuka_link_5_0" content_type="model/obj" file="/home/elecnor/Documentos/Teleoperacion-tron-2/kuka_kr210_support/meshes/kr210l150/visual_mujoco/link_5_0.obj" /><mesh name="kuka_link_6_0" content_type="model/obj" file="/home/elecnor/Documentos/Teleoperacion-tron-2/kuka_kr210_support/meshes/kr210l150/visual_mujoco/link_6_0.obj" /></asset>
   <worldbody>
     <light directional="true" diffuse="0.4 0.4 0.4" specular="0.1 0.1 0.1" pos="0 0 5.0" dir="0 0 -1" castshadow="false" />
     <light directional="true" diffuse="0.6 0.6 0.6" specular="0.2 0.2 0.2" pos="0 0 4" dir="0 0 -1" castshadow="false" />
@@ -101,20 +101,6 @@
       <geom mesh="base_Link" class="collision" group="3" />
       <geom name="logo_elecnor_pecho" class="visual_logo" material="mat_elecnor" size="0.0015 0.0520 0.0520" pos="0.1685 0 0.1500" />
       <site name="base_imu" pos="0 0 0" />
-      
-      <body name="base_2_Link" pos="0.00056 -9e-05 -0.07285">
-        <inertial pos="0 0 -0.45862" quat="0.707107 0 0 0.707107" mass="10" diaginertia="0.811937 0.80635 0.017624" />
-        <geom mesh="base_2_Link" class="visual_azul_medio" />
-        <geom size="0.059 0.0425 0.49" pos="0 0 -0.45862" type="box" group="3" />
-        <geom name="logo_idi_columna" class="visual_logo" material="mat_idi" size="0.0015 0.0500 0.0200" pos="0.0605 0 -0.3500" />
-        <geom name="franja_columna_0" class="visual_franja" size="0.0600 0.0435 0.0110" pos="0 0 -0.150" />
-        <geom name="franja_columna_1" class="visual_franja" size="0.0600 0.0435 0.0110" pos="0 0 -0.520" />
-        <body name="base_3_Link" pos="0 0 -0.9295">
-          <inertial pos="0 0 -0.05442" quat="0.5 0.5 -0.5 0.5" mass="20" diaginertia="1.6803 0.9485 0.9485" />
-          <geom mesh="base_3_Link" class="visual_negro" />
-          <geom mesh="base_3_Link" class="collision" group="3" />
-        </body>
-      </body>
       
       <body name="proximal_pitch_L_Link" pos="-0.00044 0.09178 0.05474">
         <inertial pos="-0.00547 0.07014 -0.00611" quat="0.749537 0.661877 -0.00992031 0.00384555" mass="2.21" diaginertia="0.00438583 0.0035012 0.00307523" />
@@ -151,7 +137,59 @@
                     <joint name="wrist_roll_L_Joint" pos="0 0 0" axis="1 0 0" range="-1.5708 1.5708" actuatorfrcrange="-20 20" armature="0.0166082" />
                     <geom mesh="wrist_roll_L_Link" class="visual_naranja" />
                     <geom mesh="wrist_roll_L_Link_collision" class="collision" group="3" />
+                    <body name="grasper_base_L_Link" pos="-0.0317 0 -0.0812">
+                      <inertial pos="-3.3414980e-04 5.3895572e-05 -5.9247964e-02" mass="0.49169168" fullinertia="7.7058372e-04 6.8423133e-04 3.2638784e-04 -7.3989424e-07 9.9599422e-07 -1.8328899e-06" />
+                      <joint name="grasper_base_L_Joint" pos="0 0 0" axis="0 0 1" range="0.0 1.8326" actuatorfrcrange="-20 20" />
+                      <geom mesh="grasper_L_base_Link" class="visual_azul_medio" />
+                      <geom mesh="grasper_L_base_Link" class="collision" group="3" />
+                      
+                      <body name="grasper_L_crank_left_Link" pos="0 0.0275 -0.0689">
+                        <inertial pos="4.7600073e-06 -0.0055481701 -0.019012995" mass="0.0028716751" fullinertia="8.4974068e-07 1.0893102e-06 3.9176962e-07 -8.1619392e-11 -2.8305318e-10 -2.2248284e-07" />
+                        <joint name="grasper_L_drive_Joint" pos="0 0 0" axis="1 0 0" range="-0.09522 0.77302" actuatorfrcrange="-2 2" armature="0.0005" />
+                        <geom mesh="grasper_L_crank_left_Link" class="visual_azul_medio" />
+                        <body name="grasper_L_jaw_left_Link" pos="0 -0.01401 -0.048">
+                          <inertial pos="1.392162e-07 -0.0012691085 -0.023147552" mass="0.011059233" fullinertia="3.8418984e-06 4.2033876e-06 1.006352e-06 3.6462472e-12 -3.5054283e-11 -5.2696422e-07" />
+                          <joint name="grasper_L_tip_left_Joint" pos="0 0 0" axis="1 0 0" range="-0.77302 0.09522" armature="0.0005" />
+                          <geom mesh="grasper_L_jaw_left_Link" class="visual_azul_medio" />
+                          <geom mesh="grasper_L_jaw_left_Link" class="collision" group="3" />
+                        </body>
+                      </body>
+                      <body name="grasper_L_bar_left_Link" pos="0 0.04136 -0.0609">
+                        <inertial pos="-2.9205723e-07 -0.0062299561 -0.013666476" mass="0.0036449843" fullinertia="1.4160278e-06 1.6580051e-06 4.4120395e-07 -4.0833729e-12 2.3404541e-11 -1.8301211e-07" />
+                        <joint name="grasper_L_bar_left_Joint" pos="0 0 0" axis="1 0 0" range="-0.09522 0.77302" armature="0.0005" />
+                        <geom mesh="grasper_L_bar_left_Link" class="visual_azul_medio" />
+                      </body>
+                      <body name="grasper_L_crank_right_Link" pos="0 -0.0275 -0.0689">
+                        <inertial pos="-4.8119616e-06 0.0055481697 -0.019012993" mass="0.0028716752" fullinertia="8.4974076e-07 1.0893103e-06 3.9176964e-07 -8.1479958e-11 2.8278323e-10 2.2248286e-07" />
+                        <joint name="grasper_L_crank_right_Joint" pos="0 0 0" axis="-1 0 0" range="-0.09522 0.77302" armature="0.0005" />
+                        <geom mesh="grasper_L_crank_right_Link" class="visual_azul_medio" />
+                        <body name="grasper_L_jaw_right_Link" pos="0 0.01401 -0.048">
+                          <inertial pos="-2.2359754e-07 0.0012691084 -0.023147552" mass="0.011059233" fullinertia="3.8418985e-06 4.2033877e-06 1.006352e-06 3.9560488e-12 3.3441013e-11 5.2696424e-07" />
+                          <joint name="grasper_L_tip_right_Joint" pos="0 0 0" axis="-1 0 0" range="-0.77302 0.09522" armature="0.0005" />
+                          <geom mesh="grasper_L_jaw_right_Link" class="visual_azul_medio" />
+                          <geom mesh="grasper_L_jaw_right_Link" class="collision" group="3" />
+                        </body>
+                      </body>
+                      <body name="grasper_L_bar_right_Link" pos="0 -0.04136 -0.0609">
+                        <inertial pos="2.4766637e-07 0.0062299561 -0.013666476" mass="0.0036449843" fullinertia="1.4160279e-06 1.6580051e-06 4.4120396e-07 -3.9635664e-12 -2.3989416e-11 1.8301211e-07" />
+                        <joint name="grasper_L_bar_right_Joint" pos="0 0 0" axis="-1 0 0" range="-0.09522 0.77302" armature="0.0005" />
+                        <geom mesh="grasper_L_bar_right_Link" class="visual_azul_medio" />
+                      </body>
+                      <body name="grasper_L_nut_Link" pos="0 0 0">
+                        <inertial pos="-2.7416387e-08 -4.6963269e-12 -0.089912512" mass="0.0029565354" fullinertia="3.2809364e-07 2.3847151e-07 5.2186569e-07 2.710444e-12 4.8523164e-14 -1.5187541e-16" />
+                        <joint name="grasper_L_nut_Joint" pos="0 0 0" axis="0 0 1" type="slide" range="-0.0019044 0.0154604" />
+                        <geom mesh="grasper_L_nut_Link" class="visual_azul_medio" />
+                      </body>
+                      <body name="grasper_L_jaw_left_ref_Link" pos="0 0 0">
+                        <inertial pos="0 0 0" mass="0.0001" diaginertia="1e-08 1e-08 1e-08" />
+                        <joint name="grasper_L_jaw_left_Joint" pos="0 0 0" axis="0 1 0" type="slide" range="-0.0045 0.0375" />
+                      </body>
+                      <body name="grasper_L_jaw_right_ref_Link" pos="0 0 0">
+                        <inertial pos="0 0 0" mass="0.0001" diaginertia="1e-08 1e-08 1e-08" />
+                        <joint name="grasper_L_jaw_right_Joint" pos="0 0 0" axis="0 -1 0" type="slide" range="-0.0045 0.0375" />
+                      </body>
                     </body>
+                  </body>
                 </body>
               </body>
             </body>
@@ -194,7 +232,59 @@
                     <joint name="wrist_roll_R_Joint" pos="0 0 0" axis="1 0 0" range="-1.5708 1.5708" actuatorfrcrange="-20 20" armature="0.0166082" />
                     <geom mesh="wrist_roll_R_Link" class="visual_naranja" />
                     <geom mesh="wrist_roll_R_Link_collision" class="collision" group="3" />
+                    <body name="grasper_base_R_Link" pos="-0.0317 0 -0.0812">
+                      <inertial pos="-3.3414980e-04 -5.3895554e-05 -5.9247964e-02" mass="0.49169168" fullinertia="7.7058372e-04 6.8423133e-04 3.2638784e-04 7.4138256e-07 9.9599422e-07 1.8328899e-06" />
+                      <joint name="grasper_base_R_Joint" pos="0 0 0" axis="0 0 1" range="0.0 1.8326" actuatorfrcrange="-20 20" />
+                      <geom mesh="grasper_R_base_Link" class="visual_azul_medio" />
+                      <geom mesh="grasper_R_base_Link" class="collision" group="3" />
+                      
+                      <body name="grasper_R_crank_left_Link" pos="0 0.0275 -0.0689">
+                        <inertial pos="4.7600073e-06 -0.0055481701 -0.019012995" mass="0.0028716751" fullinertia="8.4974068e-07 1.0893102e-06 3.9176962e-07 -8.1619392e-11 -2.8305318e-10 -2.2248284e-07" />
+                        <joint name="grasper_R_drive_Joint" pos="0 0 0" axis="1 0 0" range="-0.09522 0.77302" actuatorfrcrange="-2 2" armature="0.0005" />
+                        <geom mesh="grasper_R_crank_left_Link" class="visual_azul_medio" />
+                        <body name="grasper_R_jaw_left_Link" pos="0 -0.01401 -0.048">
+                          <inertial pos="1.392162e-07 -0.0012691085 -0.023147552" mass="0.011059233" fullinertia="3.8418984e-06 4.2033876e-06 1.006352e-06 3.6462472e-12 -3.5054283e-11 -5.2696422e-07" />
+                          <joint name="grasper_R_tip_left_Joint" pos="0 0 0" axis="1 0 0" range="-0.77302 0.09522" armature="0.0005" />
+                          <geom mesh="grasper_R_jaw_left_Link" class="visual_azul_medio" />
+                          <geom mesh="grasper_R_jaw_left_Link" class="collision" group="3" />
+                        </body>
+                      </body>
+                      <body name="grasper_R_bar_left_Link" pos="0 0.04136 -0.0609">
+                        <inertial pos="-2.9205723e-07 -0.0062299561 -0.013666476" mass="0.0036449843" fullinertia="1.4160278e-06 1.6580051e-06 4.4120395e-07 -4.0833729e-12 2.3404541e-11 -1.8301211e-07" />
+                        <joint name="grasper_R_bar_left_Joint" pos="0 0 0" axis="1 0 0" range="-0.09522 0.77302" armature="0.0005" />
+                        <geom mesh="grasper_R_bar_left_Link" class="visual_azul_medio" />
+                      </body>
+                      <body name="grasper_R_crank_right_Link" pos="0 -0.0275 -0.0689">
+                        <inertial pos="-4.8119616e-06 0.0055481697 -0.019012993" mass="0.0028716752" fullinertia="8.4974076e-07 1.0893103e-06 3.9176964e-07 -8.1479958e-11 2.8278323e-10 2.2248286e-07" />
+                        <joint name="grasper_R_crank_right_Joint" pos="0 0 0" axis="-1 0 0" range="-0.09522 0.77302" armature="0.0005" />
+                        <geom mesh="grasper_R_crank_right_Link" class="visual_azul_medio" />
+                        <body name="grasper_R_jaw_right_Link" pos="0 0.01401 -0.048">
+                          <inertial pos="-2.2359754e-07 0.0012691084 -0.023147552" mass="0.011059233" fullinertia="3.8418985e-06 4.2033877e-06 1.006352e-06 3.9560488e-12 3.3441013e-11 5.2696424e-07" />
+                          <joint name="grasper_R_tip_right_Joint" pos="0 0 0" axis="-1 0 0" range="-0.77302 0.09522" armature="0.0005" />
+                          <geom mesh="grasper_R_jaw_right_Link" class="visual_azul_medio" />
+                          <geom mesh="grasper_R_jaw_right_Link" class="collision" group="3" />
+                        </body>
+                      </body>
+                      <body name="grasper_R_bar_right_Link" pos="0 -0.04136 -0.0609">
+                        <inertial pos="2.4766637e-07 0.0062299561 -0.013666476" mass="0.0036449843" fullinertia="1.4160279e-06 1.6580051e-06 4.4120396e-07 -3.9635664e-12 -2.3989416e-11 1.8301211e-07" />
+                        <joint name="grasper_R_bar_right_Joint" pos="0 0 0" axis="-1 0 0" range="-0.09522 0.77302" armature="0.0005" />
+                        <geom mesh="grasper_R_bar_right_Link" class="visual_azul_medio" />
+                      </body>
+                      <body name="grasper_R_nut_Link" pos="0 0 0">
+                        <inertial pos="-2.7416387e-08 -4.6963269e-12 -0.089912512" mass="0.0029565354" fullinertia="3.2809364e-07 2.3847151e-07 5.2186569e-07 2.710444e-12 4.8523164e-14 -1.5187541e-16" />
+                        <joint name="grasper_R_nut_Joint" pos="0 0 0" axis="0 0 1" type="slide" range="-0.0019044 0.0154604" />
+                        <geom mesh="grasper_R_nut_Link" class="visual_azul_medio" />
+                      </body>
+                      <body name="grasper_R_jaw_left_ref_Link" pos="0 0 0">
+                        <inertial pos="0 0 0" mass="0.0001" diaginertia="1e-08 1e-08 1e-08" />
+                        <joint name="grasper_R_jaw_left_Joint" pos="0 0 0" axis="0 1 0" type="slide" range="-0.0045 0.0375" />
+                      </body>
+                      <body name="grasper_R_jaw_right_ref_Link" pos="0 0 0">
+                        <inertial pos="0 0 0" mass="0.0001" diaginertia="1e-08 1e-08 1e-08" />
+                        <joint name="grasper_R_jaw_right_Joint" pos="0 0 0" axis="0 -1 0" type="slide" range="-0.0045 0.0375" />
+                      </body>
                     </body>
+                  </body>
                 </body>
               </body>
             </body>
@@ -244,7 +334,7 @@
       <geom name="target_right_axis_y" type="cylinder" fromto="0 0 0 0 0.08 0" size="0.006" rgba="0 1 0 0.9" contype="0" conaffinity="0" group="4" />
       <geom name="target_right_axis_z" type="cylinder" fromto="0 0 0 0 0 0.08" size="0.006" rgba="0 0 1 0.9" contype="0" conaffinity="0" group="4" />
     </body>
-  <geom contype="0" conaffinity="0" group="5" name="techo" type="box" pos="1.3000 0.0000 2.2800" size="1.1500 2.2000 0.0300" rgba="0.78 0.78 0.76 1" /><geom contype="0" conaffinity="0" group="5" name="tubo_techo_0" type="cylinder" fromto="0.4200 0.0500 1.5500 0.4200 1.6000 1.5500" size="0.0200" rgba="0.62 0.64 0.66 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.4200 0.4375 1.5700 0.4200 0.4375 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.4200 0.4255 1.5500 0.4200 0.4495 1.5500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.4200 1.2125 1.5700 0.4200 1.2125 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.4200 1.2005 1.5500 0.4200 1.2245 1.5500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" name="tubo_techo_1" type="cylinder" fromto="0.4200 1.6000 1.5500 2.4000 1.6000 1.5500" size="0.0200" rgba="0.62 0.64 0.66 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.7500 1.6000 1.5700 0.7500 1.6000 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.7380 1.6000 1.5500 0.7620 1.6000 1.5500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="1.4100 1.6000 1.5700 1.4100 1.6000 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="1.3980 1.6000 1.5500 1.4220 1.6000 1.5500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="2.0700 1.6000 1.5700 2.0700 1.6000 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="2.0580 1.6000 1.5500 2.0820 1.6000 1.5500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" name="tubo_techo_2" type="cylinder" fromto="0.8500 -2.0000 1.8500 0.8500 2.0000 1.8500" size="0.0200" rgba="0.62 0.64 0.66 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 -1.6667 1.8700 0.8500 -1.6667 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 -1.6787 1.8500 0.8500 -1.6547 1.8500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 -1.0000 1.8700 0.8500 -1.0000 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 -1.0120 1.8500 0.8500 -0.9880 1.8500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 -0.3333 1.8700 0.8500 -0.3333 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 -0.3453 1.8500 0.8500 -0.3213 1.8500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 0.3333 1.8700 0.8500 0.3333 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 0.3213 1.8500 0.8500 0.3453 1.8500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 1.0000 1.8700 0.8500 1.0000 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 0.9880 1.8500 0.8500 1.0120 1.8500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 1.6667 1.8700 0.8500 1.6667 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.8500 1.6547 1.8500 0.8500 1.6787 1.8500" size="0.0260" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" name="tubo_techo_3" type="cylinder" fromto="0.3000 -1.2000 1.9500 2.4000 -1.2000 1.9500" size="0.0320" rgba="0.62 0.64 0.66 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.6500 -1.2000 1.9820 0.6500 -1.2000 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.6380 -1.2000 1.9500 0.6620 -1.2000 1.9500" size="0.0380" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="1.3500 -1.2000 1.9820 1.3500 -1.2000 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="1.3380 -1.2000 1.9500 1.3620 -1.2000 1.9500" size="0.0380" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="2.0500 -1.2000 1.9820 2.0500 -1.2000 2.2500" size="0.0040" rgba="0.35 0.36 0.38 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="2.0380 -1.2000 1.9500 2.0620 -1.2000 1.9500" size="0.0380" rgba="0.94 0.49 0.15 1" /><geom contype="0" conaffinity="0" group="5" type="sphere" pos="0.4200 1.6000 1.5500" size="0.0260" rgba="0.50 0.53 0.56 1" /><geom contype="0" conaffinity="0" group="5" name="punto_conexion" type="cylinder" fromto="0.4200 0.0760 1.5500 0.4200 0.0640 1.5500" size="0.0340" rgba="0.9400 0.4900 0.1500 0.5500" /><geom contype="0" conaffinity="0" group="5" name="mesa" type="box" pos="0.8000 -0.2200 0.9350" size="0.2000 0.2400 0.0150" rgba="0.00 0.23 0.56 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.6300 -0.4300 0.0000 0.6300 -0.4300 0.9200" size="0.0150" rgba="0.55 0.57 0.60 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.6300 -0.0100 0.0000 0.6300 -0.0100 0.9200" size="0.0150" rgba="0.55 0.57 0.60 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.9700 -0.4300 0.0000 0.9700 -0.4300 0.9200" size="0.0150" rgba="0.55 0.57 0.60 1" /><geom contype="0" conaffinity="0" group="5" type="cylinder" fromto="0.9700 -0.0100 0.0000 0.9700 -0.0100 0.9200" size="0.0150" rgba="0.55 0.57 0.60 1" /><body name="tubo_suelto" mocap="true" pos="0.6760 -0.2201 1.0303" quat="1.0000 0.0000 0.0000 0.0000"><geom contype="0" conaffinity="0" group="5" name="tubo_suelto_0" type="mesh" rgba="0.95 0.72 0.10 1" mass="0" mesh="pieza_taladro_cuerpo" pos="0.0000 0.0000 0.0000" quat="1.0000 0.0000 0.0000 0.0000" /><geom contype="0" conaffinity="0" group="5" name="tubo_suelto_1" type="mesh" rgba="0.12 0.12 0.12 1" mass="0" mesh="pieza_taladro_empunadura" pos="0.0000 0.0000 0.0000" quat="1.0000 0.0000 0.0000 0.0000" /><geom contype="0" conaffinity="0" group="5" name="tubo_suelto_2" type="mesh" rgba="0.25 0.25 0.27 1" mass="0" mesh="pieza_taladro_bateria" pos="0.0000 0.0000 0.0000" quat="1.0000 0.0000 0.0000 0.0000" /><geom contype="0" conaffinity="0" group="5" name="tubo_suelto_3" type="mesh" rgba="0.10 0.10 0.10 1" mass="0" mesh="pieza_taladro_portabrocas" pos="0.0720 0.0001 0.0625" quat="1.0000 0.0000 0.0000 0.0000" /><geom contype="0" conaffinity="0" group="5" name="tubo_suelto_4" type="mesh" rgba="0.78 0.78 0.80 1" mass="0" mesh="pieza_taladro_broca" pos="0.0720 0.0001 0.0625" quat="1.0000 0.0000 0.0000 0.0000" /></body></worldbody>
+  <body name="kuka_soporte" pos="-1.4 0 0" quat="1 0 0 0"><body name="kuka_base_link" pos="0 0 0" quat="1 0 0 0"><geom pos="0 0 0" quat="0.707107 -0.707107 0 0" type="mesh" mesh="kuka_base_link_0" contype="0" conaffinity="0" group="1" density="0" rgba="0.118 0.118 0.118 1" /><geom quat="0.707107 -0.707107 0 0" type="mesh" mesh="kuka_base_link_1" contype="0" conaffinity="0" group="1" density="0" rgba="0.949 0.361 0.098 1" /></body><body name="kuka_link_1" pos="-0.00262 0.00097586 0.33099" quat="0.000727706 0 0 1"><geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="kuka_link_1_0" contype="0" conaffinity="0" group="1" density="0" rgba="0.118 0.118 0.118 1" /><geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="kuka_link_1_1" contype="0" conaffinity="0" group="1" density="0" rgba="0.949 0.361 0.098 1" /></body><body name="kuka_link_2" pos="-0.355335 0.0389652 0.75019" quat="0.000708335 0.229197 -0.000166788 0.97338"><geom pos="0 0 0" quat="0.707107 -0.707107 0 0" type="mesh" mesh="kuka_link_2_0" contype="0" conaffinity="0" group="1" density="0" rgba="0.949 0.361 0.098 1" /></body><body name="kuka_link_3" pos="0.202663 0.185653 1.86873" quat="-0.000243837 0.942191 -0.000685638 -0.335076"><geom pos="0 0 0" quat="0.707107 -0.707107 0 0" type="mesh" mesh="kuka_link_3_0" contype="0" conaffinity="0" group="1" density="0" rgba="0.949 0.361 0.098 1" /><geom pos="0 0 0" quat="0.707107 -0.707107 0 0" type="mesh" mesh="kuka_link_3_1" contype="0" conaffinity="0" group="1" density="0" rgba="0.118 0.118 0.118 1" /></body><body name="kuka_link_4" pos="0.979999 0.000521743 1.30656" quat="-0.000243837 0.942191 -0.000685638 -0.335076"><geom pos="0 0 0" quat="0.707107 -0.707107 0 0" type="mesh" mesh="kuka_link_4_0" contype="0" conaffinity="0" group="1" density="0" rgba="0.949 0.361 0.098 1" /></body><body name="kuka_link_5" pos="1.40029 -8.99559e-05 0.964338" quat="0.000495577 0.732271 -0.000532879 0.681013"><geom pos="0 0 0" quat="0.707107 -0.707107 0 0" type="mesh" mesh="kuka_link_5_0" contype="0" conaffinity="0" group="1" density="0" rgba="0.949 0.361 0.098 1" /></body><body name="kuka_link_6" pos="1.41424 -0.000110252 1.15633" quat="0.732272 3.73015e-05 -0.681013 -3.73015e-05"><geom quat="1 0 0 0" type="mesh" mesh="kuka_link_6_0" contype="0" conaffinity="0" group="1" density="0" rgba="0.118 0.118 0.118 1" /></body><body name="kuka_tool0" pos="1.41719 -0.000114205 1.19372" quat="0.732272 3.73015e-05 -0.681013 -3.73015e-05" /><body name="kuka_Link1" pos="-0.00262 0.00097586 0.33099" quat="0.000727706 0 0 1" /></body></worldbody>
   <actuator>
     <motor name="proximal_pitch_L" joint="proximal_pitch_L_Joint" ctrllimited="true" ctrlrange="-150 150" gear="1" />
     <motor name="proximal_roll_L" joint="proximal_roll_L_Joint" ctrllimited="true" ctrlrange="-150 150" gear="1" />
@@ -260,6 +350,10 @@
     <motor name="wrist_yaw_R" joint="wrist_yaw_R_Joint" ctrllimited="true" ctrlrange="-20 20" gear="1" />
     <motor name="wrist_pitch_R" joint="wrist_pitch_R_Joint" ctrllimited="true" ctrlrange="-20 20" gear="1" />
     <motor name="wrist_roll_R" joint="wrist_roll_R_Joint" ctrllimited="true" ctrlrange="-20 20" gear="1" />
+    <motor name="grasper_base_L_Joint_ctrl" joint="grasper_base_L_Joint" ctrllimited="true" ctrlrange="-20 20" gear="1" />
+    <motor name="grasper_L_drive_Joint_ctrl" joint="grasper_L_drive_Joint" ctrllimited="true" ctrlrange="-2 2" gear="1" />
+    <motor name="grasper_base_R_Joint_ctrl" joint="grasper_base_R_Joint" ctrllimited="true" ctrlrange="-20 20" gear="1" />
+    <motor name="grasper_R_drive_Joint_ctrl" joint="grasper_R_drive_Joint" ctrllimited="true" ctrlrange="-2 2" gear="1" />
     <motor name="head_yaw" joint="head_yaw_Joint" ctrlrange="-20 20" gear="1" />
     <motor name="head_pitch" joint="head_pitch_Joint" ctrlrange="-20 20" gear="1" />
   </actuator>
@@ -281,6 +375,12 @@
     <jointpos joint="wrist_yaw_R_Joint" name="wrist_yaw_R_pos" />
     <jointpos joint="wrist_pitch_R_Joint" name="wrist_pitch_R_pos" />
     <jointpos joint="wrist_roll_R_Joint" name="wrist_roll_R_pos" />
+    <jointpos joint="grasper_base_L_Joint" name="grasper_base_L_pos" />
+    <jointpos joint="grasper_L_jaw_left_Joint" name="grasper_L_jaw_pos" />
+    <jointpos joint="grasper_L_drive_Joint" name="grasper_L_drive_pos" />
+    <jointpos joint="grasper_base_R_Joint" name="grasper_base_R_pos" />
+    <jointpos joint="grasper_R_jaw_left_Joint" name="grasper_R_jaw_pos" />
+    <jointpos joint="grasper_R_drive_Joint" name="grasper_R_drive_pos" />
     <jointpos joint="head_yaw_Joint" name="head_yaw_pos" />
     <jointpos joint="head_pitch_Joint" name="head_pitch_pos" />
     <jointvel joint="proximal_pitch_L_Joint" name="proximal_pitch_L_vel" />
@@ -297,6 +397,12 @@
     <jointvel joint="wrist_yaw_R_Joint" name="wrist_yaw_R_vel" />
     <jointvel joint="wrist_pitch_R_Joint" name="wrist_pitch_R_vel" />
     <jointvel joint="wrist_roll_R_Joint" name="wrist_roll_R_vel" />
+    <jointvel joint="grasper_base_L_Joint" name="grasper_base_L_vel" />
+    <jointvel joint="grasper_L_jaw_left_Joint" name="grasper_L_jaw_vel" />
+    <jointvel joint="grasper_L_drive_Joint" name="grasper_L_drive_vel" />
+    <jointvel joint="grasper_base_R_Joint" name="grasper_base_R_vel" />
+    <jointvel joint="grasper_R_jaw_left_Joint" name="grasper_R_jaw_vel" />
+    <jointvel joint="grasper_R_drive_Joint" name="grasper_R_drive_vel" />
     <jointvel joint="head_yaw_Joint" name="head_yaw_vel" />
     <jointvel joint="head_pitch_Joint" name="head_pitch_vel" />
     <jointactuatorfrc joint="proximal_pitch_L_Joint" name="proximal_pitch_L_frc" />
@@ -313,12 +419,33 @@
     <jointactuatorfrc joint="wrist_yaw_R_Joint" name="wrist_yaw_R_frc" />
     <jointactuatorfrc joint="wrist_pitch_R_Joint" name="wrist_pitch_R_frc" />
     <jointactuatorfrc joint="wrist_roll_R_Joint" name="wrist_roll_R_frc" />
+    <jointactuatorfrc joint="grasper_base_L_Joint" name="grasper_base_L_frc" />
+    <jointactuatorfrc joint="grasper_L_drive_Joint" name="grasper_L_drive_frc" />
+    <jointactuatorfrc joint="grasper_base_R_Joint" name="grasper_base_R_frc" />
+    <jointactuatorfrc joint="grasper_R_drive_Joint" name="grasper_R_drive_frc" />
     <jointactuatorfrc joint="head_yaw_Joint" name="head_yaw_frc" />
     <jointactuatorfrc joint="head_pitch_Joint" name="head_pitch_frc" />
   </sensor>
   <contact>
-    </contact>
+    <exclude body1="grasper_base_L_Link" body2="grasper_L_jaw_left_Link" />
+    <exclude body1="grasper_base_L_Link" body2="grasper_L_jaw_right_Link" />
+    <exclude body1="grasper_base_R_Link" body2="grasper_R_jaw_left_Link" />
+    <exclude body1="grasper_base_R_Link" body2="grasper_R_jaw_right_Link" />
+  </contact>
   <equality>
     
-    </equality>
+    <connect body1="grasper_L_bar_left_Link" body2="grasper_L_jaw_left_Link" anchor="0 -0.01401 -0.048" />
+    <connect body1="grasper_L_bar_right_Link" body2="grasper_L_jaw_right_Link" anchor="0 0.01401 -0.048" />
+    <joint joint1="grasper_L_crank_right_Joint" joint2="grasper_L_drive_Joint" polycoef="0 1 0 0 0" />
+    <joint joint1="grasper_L_nut_Joint" joint2="grasper_L_drive_Joint" polycoef="0 0.02 0 0 0" />
+    <joint joint1="grasper_L_jaw_left_Joint" joint2="grasper_L_drive_Joint" polycoef="-3.3776e-07 0.0479991 0.0070779 -0.0083881 0.0001134" />
+    <joint joint1="grasper_L_jaw_right_Joint" joint2="grasper_L_drive_Joint" polycoef="-3.3776e-07 0.0479991 0.0070779 -0.0083881 0.0001134" />
+    
+    <connect body1="grasper_R_bar_left_Link" body2="grasper_R_jaw_left_Link" anchor="0 -0.01401 -0.048" />
+    <connect body1="grasper_R_bar_right_Link" body2="grasper_R_jaw_right_Link" anchor="0 0.01401 -0.048" />
+    <joint joint1="grasper_R_crank_right_Joint" joint2="grasper_R_drive_Joint" polycoef="0 1 0 0 0" />
+    <joint joint1="grasper_R_nut_Joint" joint2="grasper_R_drive_Joint" polycoef="0 0.02 0 0 0" />
+    <joint joint1="grasper_R_jaw_left_Joint" joint2="grasper_R_drive_Joint" polycoef="-3.3776e-07 0.0479991 0.0070779 -0.0083881 0.0001134" />
+    <joint joint1="grasper_R_jaw_right_Joint" joint2="grasper_R_drive_Joint" polycoef="-3.3776e-07 0.0479991 0.0070779 -0.0083881 0.0001134" />
+  </equality>
 </mujoco>
