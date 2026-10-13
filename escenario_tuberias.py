@@ -4,8 +4,8 @@ Escenario de montaje de tuberias de PVC para el TRON 2.
   - Techo con una red de tuberias ya instalada, colgada con varillas y abrazaderas.
   - Una de esas tuberias termina en un extremo libre al alcance del robot, marcado
     con un anillo: es el PUNTO DE CONEXION.
-  - En una mesa delante del robot hay una pieza suelta: un tramo con codo de 90
-    grados y una copa (manguito) en cada extremo.
+  - En un banco de trabajo A LA DERECHA del robot hay una pieza suelta (el taladro,
+    o un tramo con codo de 90 grados y una copa (manguito) en cada extremo).
 
 La tarea: coger la pieza con una pinza (cerrar la mano cerca de ella), llevarla
 hasta el punto de conexion y encajar uno de sus extremos en el tubo del techo.
@@ -18,6 +18,19 @@ al cerrar la pinza junto a la pieza, esta pasa a moverse solidaria con la pinza.
 
 Todas las medidas estan en metros, en el marco del mundo del robot:
 x hacia delante del robot, y a su izquierda, z hacia arriba.
+
+CAMBIOS (oct-2026, mesa):
+  - La mesa pasa de estar DELANTE del robot a su DERECHA (y negativa), con el lado largo
+    paralelo al robot. La pieza se deja en la mitad de la mesa mas cercana al robot
+    (PIEZA_EN_MESA) para que la alcance el brazo derecho.
+  - Mesa nueva: banco de trabajo con tablero de roble, tapete azul Elecnor, bastidor de
+    acero antracita con faldones, franja naranja Elecnor, balda inferior y pies niveladores.
+  - Al arrancar se imprime a que distancia queda la pieza del hombro derecho, comparada
+    con el alcance del brazo (aviso si queda demasiado lejos).
+  - Mesa de estilo nordico (roble con veta, patas de nogal con contera de laton). El tablero
+    y la almohadilla de fieltro son UNA malla cada uno: con piezas solapadas en el mismo
+    plano MuJoCo no sabia cual pintar delante y la textura parpadeaba y salia cortada.
+  - Cada geom de la mesa lleva rgba explicito: el <default> del robot es semitransparente.
 """
 import os
 import xml.etree.ElementTree as ET
@@ -48,9 +61,37 @@ TUBOS_TECHO = [
 CODOS_TECHO = [((0.42, 1.60, 1.55), R_TUBO)]
 SEPARACION_SOPORTES = 0.60
 
-MESA_CENTRO = (0.8, -0.22)     # centrada: la alcanzan los DOS brazos (antes 0.46, -0.22)
-MESA_MEDIO = (0.20, 0.24)        # semiancho en x, y
-MESA_ALTO = 0.95                 # altura del tablero
+# ---------------- MESA (banco de trabajo a la DERECHA del robot) -----------------
+MESA_CENTRO = (0.15, -0.62)      # x, y del centro (antes 0.8, -0.22: delante del robot)
+MESA_MEDIO = (0.36, 0.22)        # semiancho en x (a lo largo del robot) y en y
+MESA_ALTO = 0.95                 # altura de la superficie de apoyo (encima del tapete)
+# Donde se deja la pieza, respecto al centro de la mesa. +y = hacia el robot: asi
+# queda en la mitad cercana, al alcance del brazo DERECHO.
+PIEZA_EN_MESA = (0.0, 0.10)
+
+# Medidas de la mesa (solo estetica: la logica usa MESA_CENTRO / MESA_MEDIO / MESA_ALTO)
+# Estilo nordico: tablero de roble con veta y esquinas redondeadas, almohadilla de
+# fieltro antracita con pespunte naranja Elecnor, patas de nogal inclinadas con contera
+# de laton y una balda de listones.
+# El tablero y el fieltro son cada uno UNA malla (losa de esquinas redondeadas con sus
+# coordenadas de textura): nada de piezas solapadas en el mismo plano, que parpadeaban.
+GROSOR_TABLERO = 0.036           # tablero de roble
+RADIO_ESQUINA = 0.055            # esquinas redondeadas del tablero (vistas desde arriba)
+GROSOR_TAPETE = 0.003            # almohadilla de fieltro encima del tablero
+MARGEN_TAPETE = 0.045            # borde de madera que queda a la vista alrededor del tapete
+PUNTADA = dict(margen=0.012,     # pespunte: distancia al borde del fieltro (m)
+               largo=0.006,      # largo de cada puntada
+               hueco=0.0035,     # hueco entre puntadas
+               ancho=0.0014)     # grosor del hilo
+RADIO_PATA = 0.019               # patas torneadas
+RETRANQUEO_PATA = 0.075          # cuanto se meten las patas (arriba) respecto al borde
+ABERTURA_PATA = (0.055, 0.040)   # cuanto se abren hacia fuera en el suelo (x, y)
+LARGO_CONTERA = 0.055            # contera de laton al pie de cada pata
+ALTO_FALDON = 0.060              # faldon de nogal bajo el tablero
+Z_BALDA = 0.24                   # altura de la balda de listones
+N_LISTONES = 5
+
+CARPETA_TEXTURAS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "decoracion")
 
 # ---------------- PIEZA DE LA MESA ----------------------------------------------
 # Que pieza hay en la mesa. Se usa la primera opcion que no sea None:
@@ -70,7 +111,8 @@ COLOR_PIEZA = "0.95 0.45 0.10 1"
 
 GIRO_PIEZA = (0.0, 0.0, 0.0)     # grados alrededor de x, y, z: como queda en la mesa
                                  # (taladro: (0, 0, 0) = de pie con la broca hacia delante;
-                                 #  (0, 0, 180) = broca hacia el robot)
+                                 #  (0, 0, 180) = broca hacia atras;
+                                 #  (0, 0, 90) = broca hacia el robot, que esta a +y)
 PIEZA_ENCAJA = None              # None = solo el codo de PVC se "instala" en el tubo del techo
 
 # Pieza suelta: origen en el codo. Tramo 1 por +y local, tramo 2 por -z local.
@@ -78,8 +120,10 @@ EXTREMOS = [  # (punto local, direccion hacia fuera)
     (np.array([0.0, L1, 0.0]), np.array([0.0, 1.0, 0.0])),
     (np.array([0.0, 0.0, -L2]), np.array([0.0, 0.0, -1.0])),
 ]
-# Sobre la mesa, tumbada: tramo 1 hacia +y del mundo, tramo 2 hacia +x
-POS_INICIAL = np.array([0.34, -0.12, MESA_ALTO + R_COPA])   # antes y = -0.36: fuera del alcance del brazo izquierdo
+# Sobre la mesa, tumbada: tramo 1 hacia +y del mundo (hacia el robot), tramo 2 hacia +x
+POS_INICIAL = np.array([MESA_CENTRO[0] + PIEZA_EN_MESA[0] - 0.10,
+                        MESA_CENTRO[1] + PIEZA_EN_MESA[1] - 0.12,
+                        MESA_ALTO + R_COPA])
 ROT_INICIAL = np.array([[0.0, 0.0, -1.0],
                         [0.0, 1.0, 0.0],
                         [1.0, 0.0, 0.0]])
@@ -137,12 +181,25 @@ PVC_COPA = "0.50 0.53 0.56 1"
 TECHO = "0.78 0.78 0.76 1"
 VARILLA = "0.35 0.36 0.38 1"
 ABRAZADERA = "0.94 0.49 0.15 1"          # naranja Elecnor
-MESA_TABLERO = "0.00 0.23 0.56 1"        # azul Elecnor
-MESA_PATAS = "0.55 0.57 0.60 1"
 ANILLO_LEJOS = np.array([0.94, 0.49, 0.15, 0.55])
 ANILLO_CERCA = np.array([1.00, 0.85, 0.10, 0.75])
 ANILLO_HECHO = np.array([0.20, 0.85, 0.30, 0.75])
 DESTELLO = np.array([0.25, 0.90, 0.35, 1.0])
+
+# Materiales de la mesa: (rgba, specular, shininess, reflectance, textura o None)
+# Las texturas se generan solas la primera vez (ver _generar_texturas) en CARPETA_TEXTURAS.
+# Si no se pueden generar, el material se queda con su color liso.
+MATERIALES_MESA = {
+    "mesa_roble":   ("0.80 0.60 0.40 1", 0.30, 0.50, 0.03, "madera_roble.png"),   # barnizado
+    "mesa_tapete":  ("0.21 0.22 0.23 1", 0.04, 0.05, 0.00, "fieltro"),            # fieltro, mate
+    "mesa_nogal":   ("0.33 0.21 0.13 1", 0.30, 0.45, 0.02, None),
+    "mesa_laton":   ("0.80 0.62 0.32 1", 0.90, 0.90, 0.15, None),
+    "mesa_naranja": ("0.94 0.49 0.15 1", 0.40, 0.50, 0.00, None),                 # naranja Elecnor
+}
+LARGO_VETA = 0.9                 # m de tablero que ocupa la imagen de la veta (alto = 1/4)
+COLORES_ROBLE = ((0.86, 0.68, 0.47), (0.66, 0.46, 0.28))       # veta clara / oscura (RGB 0..1)
+COLOR_FIELTRO = (0.20, 0.21, 0.22)                             # antracita
+COLOR_PUNTADA = (0.94, 0.49, 0.15)                             # naranja Elecnor
 
 
 # =============================== UTILIDADES ==================================
@@ -306,10 +363,12 @@ def _leer_pieza_xml(ruta, nombre_cuerpo, nombre_agarre):
 
 
 def _apoyar_en_mesa(esquinas, R):
-    """Posicion para que la pieza (girada con R) quede apoyada y centrada en la mesa."""
+    """Posicion para que la pieza (girada con R) quede apoyada en la mesa, en el
+    punto PIEZA_EN_MESA (respecto al centro del tablero)."""
     centro = R @ esquinas.mean(axis=0)
     z = MESA_ALTO - min(float((R @ c)[2]) for c in esquinas)
-    return np.array([MESA_CENTRO[0] - 0.06 - centro[0], MESA_CENTRO[1] - centro[1], z])
+    return np.array([MESA_CENTRO[0] + PIEZA_EN_MESA[0] - centro[0],
+                     MESA_CENTRO[1] + PIEZA_EN_MESA[1] - centro[1], z])
 
 
 PIEZA_XML = None          # (mallas, geoms) si la pieza sale de un .xml
@@ -359,6 +418,236 @@ if PIEZA_ENCAJA is None:
 
 
 # =============================== XML =========================================
+def _medidas_tapete():
+    """Semiancho en x, en y y radio de esquina de la almohadilla de fieltro."""
+    sx, sy = MESA_MEDIO[0] - MARGEN_TAPETE, MESA_MEDIO[1] - MARGEN_TAPETE
+    return sx, sy, max(RADIO_ESQUINA - MARGEN_TAPETE, 0.015)
+
+
+def _contorno_redondeado(sx, sy, r, n_arco=12):
+    """Puntos (N x 2) del contorno de un rectangulo de semilados sx, sy con esquinas de
+    radio r, en sentido antihorario visto desde arriba (empieza en la esquina +x +y)."""
+    r = min(r, sx, sy)
+    pts = []
+    for (ex, ey), a0 in (((1, 1), 0.0), ((-1, 1), 90.0), ((-1, -1), 180.0), ((1, -1), 270.0)):
+        for a in np.radians(np.linspace(a0, a0 + 90.0, n_arco + 1)):
+            pts.append((ex * (sx - r) + r * np.cos(a), ey * (sy - r) + r * np.sin(a)))
+    return np.array(pts)
+
+
+def _malla_losa(sx, sy, h, r, uv_cara, uv_canto, n_arco=12):
+    """Malla cerrada de una losa de esquinas redondeadas, centrada en el origen, de
+    semilados sx, sy y semigrosor h. Caras de arriba, abajo y canto con vertices propios
+    (aristas vivas, esquinas suaves). uv_cara(x, y) y uv_canto(s, z) dan las coordenadas
+    de textura (s = recorrido a lo largo del canto). Devuelve los atributos de <mesh>."""
+    anillo = _contorno_redondeado(sx, sy, r, n_arco)
+    n = len(anillo)
+    V, N, T, F = [], [], [], []
+
+    def cara(z, nz):
+        base = len(V)
+        V.append((0.0, 0.0, z)); N.append((0, 0, nz)); T.append(uv_cara(0.0, 0.0))
+        for x, y in anillo:
+            V.append((x, y, z)); N.append((0, 0, nz)); T.append(uv_cara(x, y))
+        for i in range(n):
+            a, b = base + 1 + i, base + 1 + (i + 1) % n
+            F.append((base, a, b) if nz > 0 else (base, b, a))
+
+    cara(h, 1)
+    cara(-h, -1)
+    # canto: el primer punto se repite al final para que la textura no de un salto
+    c = np.vstack([anillo, anillo[:1]])
+    centros = np.vstack([np.sign(c[:, 0]) * (sx - r), np.sign(c[:, 1]) * (sy - r)]).T
+    normal = c - centros
+    normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-9)
+    s_acum = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(c, axis=0), axis=1))]
+    base = len(V)
+    for (x, y), (nx, ny), s_ in zip(c, normal, s_acum):
+        V += [(x, y, h), (x, y, -h)]
+        N += [(nx, ny, 0), (nx, ny, 0)]
+        T += [uv_canto(s_, h), uv_canto(s_, -h)]
+    for i in range(len(c) - 1):
+        ta, ba, tb, bb = base + 2 * i, base + 2 * i + 1, base + 2 * i + 2, base + 2 * i + 3
+        F += [(ba, bb, tb), (ba, tb, ta)]
+    plano = lambda filas, fmt: " ".join(fmt.format(*f) for f in filas)
+    return {"vertex": plano(V, "{:.5f} {:.5f} {:.5f}"), "normal": plano(N, "{:.4f} {:.4f} {:.4f}"),
+            "texcoord": plano(T, "{:.5f} {:.5f}"), "face": plano(F, "{} {} {}")}
+
+
+def _ruido_suave(rng, alto, ancho, celdas):
+    """Ruido suave (alto x ancho) en [-1, 1]: rejilla aleatoria interpolada."""
+    import cv2
+    base = rng.uniform(-1, 1, (celdas[0], celdas[1])).astype(np.float32)
+    return cv2.resize(base, (ancho, alto), interpolation=cv2.INTER_CUBIC)
+
+
+def _generar_texturas():
+    """Crea (solo si faltan) las texturas de la mesa en CARPETA_TEXTURAS.
+    Devuelve {nombre de fichero: ruta absoluta} de las que existen al final."""
+    rutas = {}
+    try:
+        import cv2
+        os.makedirs(CARPETA_TEXTURAS, exist_ok=True)
+        rng = np.random.default_rng(7)                      # siempre la misma veta
+
+        ruta = os.path.join(CARPETA_TEXTURAS, "madera_roble.png")
+        if not os.path.isfile(ruta):                        # veta de roble, a lo largo de u (x)
+            alto, ancho = 512, 2048
+            v = np.linspace(0, 1, alto, dtype=np.float32)[:, None]
+            u = np.linspace(0, 1, ancho, dtype=np.float32)[None, :]
+            ondula = 0.035 * _ruido_suave(rng, alto, ancho, (6, 4)) + 0.010 * _ruido_suave(rng, alto, ancho, (24, 12))
+            anillos = 0.5 + 0.5 * np.sin(2 * np.pi * (v + ondula) * 38 + 2.0 * np.sin(u * 3.1))
+            anillos = anillos ** 3                                           # lineas finas y oscuras
+            fibra = 0.5 + 0.5 * _ruido_suave(rng, alto, ancho, (alto // 2, 8))   # fibras alargadas
+            poros = rng.random((alto, ancho)).astype(np.float32) > 0.985
+            t = np.clip(0.55 * anillos + 0.30 * fibra + 0.25 * poros, 0, 1)
+            claro, oscuro = np.array(COLORES_ROBLE[0]), np.array(COLORES_ROBLE[1])
+            img = claro * (1 - t[..., None]) + oscuro * t[..., None]
+            cv2.imwrite(ruta, (np.clip(img, 0, 1)[..., ::-1] * 255).astype(np.uint8))
+        rutas["madera_roble.png"] = ruta
+
+        # fieltro: la imagen cubre la almohadilla entera (una sola vez), con el pespunte dibujado
+        # siguiendo su contorno redondeado. El nombre lleva las medidas: si cambian, se regenera.
+        sx, sy, r = _medidas_tapete()
+        ruta = os.path.join(CARPETA_TEXTURAS, f"fieltro_{round(2000 * sx)}x{round(2000 * sy)}"
+                                              f"_r{round(1000 * r)}.png")
+        if not os.path.isfile(ruta):
+            ppm = 2000                                       # pixeles por metro
+            ancho, alto = round(2 * sx * ppm), round(2 * sy * ppm)
+            fondo = np.array(COLOR_FIELTRO)
+            grano = cv2.GaussianBlur(rng.normal(0, 1, (alto, ancho)).astype(np.float32), (0, 0), 0.8)
+            manchas = _ruido_suave(rng, alto, ancho, (12, 20))
+            img = fondo * (1 + 0.07 * grano[..., None] + 0.035 * manchas[..., None])
+            img = (np.clip(img, 0, 1)[..., ::-1] * 255).astype(np.uint8)        # BGR
+
+            m = PUNTADA["margen"]
+            camino = _contorno_redondeado(sx - m, sy - m, max(r - m, 0.004), n_arco=40)
+            camino = np.vstack([camino, camino[:1]])
+            tramos = np.linalg.norm(np.diff(camino, axis=0), axis=1)
+            s_acum = np.r_[0.0, np.cumsum(tramos)]
+            periodo = PUNTADA["largo"] + PUNTADA["hueco"]
+            fino = np.linspace(0, s_acum[-1], int(s_acum[-1] / 0.0005))
+            pts = np.c_[np.interp(fino, s_acum, camino[:, 0]), np.interp(fino, s_acum, camino[:, 1])]
+            a_px = lambda q: (int(round((q[0] + sx) * ppm * 16)), int(round((sy - q[1]) * ppm * 16)))
+            grosor = max(1, round(PUNTADA["ancho"] * ppm))
+            hilo = tuple(int(255 * c) for c in COLOR_PUNTADA[::-1])
+            sombra = tuple(int(255 * c * 0.35) for c in COLOR_FIELTRO[::-1])
+            for desplaz, color in ((1.5, sombra), (0.0, hilo)):        # sombra del hilo y el hilo
+                for k in range(len(fino) - 1):
+                    if (fino[k] % periodo) < PUNTADA["largo"]:
+                        a, b = a_px(pts[k]), a_px(pts[k + 1])
+                        d = int(desplaz * 16)
+                        cv2.line(img, (a[0] + d, a[1] + d), (b[0] + d, b[1] + d), color, grosor,
+                                 cv2.LINE_AA, shift=4)
+            cv2.imwrite(ruta, img)
+        rutas["fieltro"] = ruta
+    except Exception as e:                                  # sin cv2 o sin permiso de escritura
+        print(f"[aviso] no se pudieron generar las texturas de la mesa ({e}): uso colores lisos")
+    return rutas
+
+
+def _anadir_mesa(root, geom):
+    """Mesa de estilo nordico: tablero de roble con esquinas redondeadas, almohadilla de
+    fieltro antracita con pespunte naranja Elecnor, faldon y patas inclinadas de nogal con contera de laton, y una balda
+    de listones. La superficie de apoyo queda justo a MESA_ALTO."""
+    asset = root.find("asset")
+    if asset is None:
+        asset = ET.SubElement(root, "asset")
+    texturas = _generar_texturas()
+
+    # El modelo del robot tiene un <default> que da a todos los geoms un rgba semitransparente,
+    # y un rgba heredado TAPA el color del material (la mesa salia translucida y gris).
+    # Por eso cada geom de la mesa lleva su rgba explicito: el del material, opaco, o blanco
+    # si el material tiene textura (la textura se multiplica por ese rgba).
+    color_geom = {n: ("1 1 1 1" if tex in texturas else rgba)
+                  for n, (rgba, _, _, _, tex) in MATERIALES_MESA.items()}
+    geom_escena = geom
+
+    def geom(padre, **kw):
+        if "material" in kw and "rgba" not in kw:
+            kw["rgba"] = color_geom[kw["material"]]
+        return geom_escena(padre, **kw)
+    for nombre, (rgba, spec, brillo, refl, tex) in MATERIALES_MESA.items():
+        atr = {"name": nombre, "rgba": rgba, "specular": str(spec),
+               "shininess": str(brillo), "reflectance": str(refl)}
+        if tex in texturas:
+            ET.SubElement(asset, "texture", {"name": "tex_" + nombre, "type": "2d",
+                                             "file": texturas[tex]})
+            # las losas son mallas con sus propias coordenadas de textura (ver _malla_losa);
+            # en las piezas sueltas (listones) la textura se repite por metro
+            atr.update(texture="tex_" + nombre, rgba="1 1 1 1", texuniform="true",
+                       texrepeat=f"{1 / LARGO_VETA:.4f} {4 / LARGO_VETA:.4f}")
+        ET.SubElement(asset, "material", atr)
+
+    mundo = root.find("worldbody")
+    cx, cy = MESA_CENTRO
+    mx, my = MESA_MEDIO
+
+    def losa(nombre, z, sx, sy, semigrosor, r, material, uv_cara, uv_canto):
+        """Losa de esquinas redondeadas: UNA malla (sin piezas solapadas que parpadeen)."""
+        ET.SubElement(asset, "mesh", dict(name="malla_" + nombre,
+                                          **_malla_losa(sx, sy, semigrosor, r, uv_cara, uv_canto)))
+        geom(mundo, name=nombre, type="mesh", mesh="malla_" + nombre, pos=(cx, cy, z), material=material)
+
+    # tablero: la veta corre a lo largo de x; en el canto, a lo largo del borde
+    z_tapete = MESA_ALTO - GROSOR_TAPETE / 2
+    z_tablero = MESA_ALTO - GROSOR_TAPETE - GROSOR_TABLERO / 2
+    z_bajo = MESA_ALTO - GROSOR_TAPETE - GROSOR_TABLERO
+    L = LARGO_VETA
+    losa("mesa", z_tablero, mx, my, GROSOR_TABLERO / 2, RADIO_ESQUINA, "mesa_roble",
+         uv_cara=lambda x, y: (0.5 + x / L, 0.5 + 4 * y / L),
+         uv_canto=lambda s_, z: (s_ / L, 0.3 + 4 * z / L))
+    # fieltro: la imagen (con el pespunte) cubre la almohadilla exactamente una vez
+    tx, ty, tr = _medidas_tapete()
+    losa("mesa_tapete", z_tapete, tx, ty, GROSOR_TAPETE / 2, tr, "mesa_tapete",
+         uv_cara=lambda x, y: (0.5 + x / (2 * tx), 0.5 + y / (2 * ty)),
+         uv_canto=lambda s_, z: (0.01, 0.01))
+
+    # faldon de nogal, retranqueado bajo el tablero
+    px, py = mx - RETRANQUEO_PATA, my - RETRANQUEO_PATA
+    z_f, e = z_bajo - ALTO_FALDON / 2, 0.011
+    for sy in (-1, 1):
+        geom(mundo, type="box", pos=(cx, cy + sy * py, z_f), size=(px, e, ALTO_FALDON / 2), material="mesa_nogal")
+    for sx in (-1, 1):
+        geom(mundo, type="box", pos=(cx + sx * px, cy, z_f), size=(e, py, ALTO_FALDON / 2), material="mesa_nogal")
+    # filete naranja Elecnor en el faldon que mira al robot (+y)
+    geom(mundo, name="mesa_franja", type="box", pos=(cx, cy + py + e + 0.0008, z_f),
+         size=(px - 0.05, 0.0008, 0.006), material="mesa_naranja")
+
+    # patas inclinadas hacia fuera, con contera de laton
+    ax, ay = ABERTURA_PATA
+    patas = {}
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            arriba = np.array([cx + sx * px, cy + sy * py, z_bajo])
+            abajo = np.array([cx + sx * (px + ax), cy + sy * (py + ay), RADIO_PATA])
+            patas[sx, sy] = (arriba, abajo)
+            eje = _unit(arriba - abajo)
+            geom(mundo, type="capsule", fromto=np.r_[abajo + eje * LARGO_CONTERA, arriba],
+                 size=RADIO_PATA, material="mesa_nogal")
+            geom(mundo, type="capsule", fromto=np.r_[abajo, abajo + eje * LARGO_CONTERA],
+                 size=RADIO_PATA * 1.04, material="mesa_laton")
+
+    def en_pata(sx, sy, z):
+        arriba, abajo = patas[sx, sy]
+        t = (z - abajo[2]) / (arriba[2] - abajo[2])
+        return abajo + t * (arriba - abajo)
+
+    # balda: dos travesanos (de delante a atras) y listones apoyados encima
+    r_trav = 0.013
+    for sx in (-1, 1):
+        geom(mundo, type="capsule", fromto=np.r_[en_pata(sx, -1, Z_BALDA), en_pata(sx, 1, Z_BALDA)],
+             size=r_trav, material="mesa_nogal")
+    x_in = en_pata(1, 1, Z_BALDA)[0] - cx + r_trav             # semilargo de los listones
+    y_in = en_pata(1, 1, Z_BALDA)[1] - cy - 0.02
+    ancho = 2 * y_in / N_LISTONES
+    for k in range(N_LISTONES):
+        y = cy - y_in + ancho * (k + 0.5)
+        geom(mundo, name=f"mesa_liston_{k}", type="box",
+             pos=(cx, y, Z_BALDA + r_trav + 0.009), size=(x_in, ancho / 2 - 0.006, 0.009),
+             material="mesa_roble")
+
+
 def anadir_al_modelo(root):
     """Anade el escenario al arbol XML del robot (se llama al cargar el modelo)."""
     mundo = root.find("worldbody")
@@ -395,16 +684,8 @@ def anadir_al_modelo(root):
          fromto=np.r_[p - CONEXION_EJE * 0.006, p + CONEXION_EJE * 0.006],
          size=R_TUBO + 0.014, rgba=_f(ANILLO_LEJOS))
 
-    # mesa
-    cx, cy = MESA_CENTRO
-    mx, my = MESA_MEDIO
-    geom(mundo, name="mesa", type="box", pos=(cx, cy, MESA_ALTO - 0.015),
-         size=(mx, my, 0.015), rgba=MESA_TABLERO)
-    for sx in (-1, 1):
-        for sy in (-1, 1):
-            x, y = cx + sx * (mx - 0.03), cy + sy * (my - 0.03)
-            geom(mundo, type="cylinder", fromto=(x, y, 0.0, x, y, MESA_ALTO - 0.03),
-                 size=0.015, rgba=MESA_PATAS)
+    # mesa (banco de trabajo a la derecha del robot)
+    _anadir_mesa(root, geom)
 
     # pieza suelta: cuerpo mocap (se coloca a mano desde Python en cada ciclo)
     pieza = ET.SubElement(mundo, "body", {"name": "tubo_suelto", "mocap": "true",
@@ -465,8 +746,33 @@ class EscenarioTuberias:
                         if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or "").startswith("tubo_suelto_")]
         self.rgba_pieza = m.geom_rgba[self.g_pieza].copy()
         self._informar_malla()
+        self._comprobar_alcance(robot)
         self.activa = False             # oculto y sin efecto hasta que se active
         self.reiniciar()
+
+    def _comprobar_alcance(self, robot, lado="R"):
+        """Imprime a que distancia queda el punto de agarre de la pieza del hombro del
+        brazo que la va a coger, comparada con el alcance hombro-muneca de ese brazo.
+        Es orientativo: la mano anade unos centimetros mas de alcance."""
+        try:
+            brazo = robot.brazos[lado]
+            hombro = np.asarray(brazo.hombro, dtype=float)
+            alcance = float(brazo.L_brazo + brazo.L_antebrazo)
+        except (AttributeError, KeyError, TypeError):
+            return
+        if SEGMENTO_AGARRE is not None:
+            objetivo = POS_INICIAL + ROT_INICIAL @ ((SEGMENTO_AGARRE[0] + SEGMENTO_AGARRE[1]) / 2)
+        else:
+            objetivo = POS_INICIAL.copy()
+        dist = float(np.linalg.norm(objetivo - hombro))
+        r = dist / max(alcance, 1e-9)
+        nombre = {"L": "izquierdo", "R": "derecho"}.get(lado, lado)
+        print(f"Mesa en ({MESA_CENTRO[0]:+.2f}, {MESA_CENTRO[1]:+.2f}) m | {NOMBRE_PIEZA} a "
+              f"{dist * 100:.0f} cm del hombro {nombre} (alcance hombro-muneca {alcance * 100:.0f} cm, "
+              f"{r * 100:.0f} %)")
+        if r > 0.92:
+            print(f"[aviso] la pieza queda casi al limite del brazo {nombre}: acerca la mesa "
+                  f"(sube MESA_CENTRO[1] hacia 0) o sube PIEZA_EN_MESA[1]")
 
     def _informar_malla(self):
         """Con un modelo propio, imprime la caja que ocupa tal y como la ha cargado
