@@ -9,7 +9,8 @@ Uso (desde la raiz del repositorio):
   python teleop_tron2.py --modelo lite         # MediaPipe mas rapido (menos preciso)
   python teleop_tron2.py --sin-manos           # no seguir las manos (va mas rapido)
   python teleop_tron2.py --sin-giro            # manos solo para abrir/cerrar, sin orientar la muneca
-  python teleop_tron2.py --escenario tuberias  # arranca ya con el escenario de tuberias a la vista
+  python teleop_tron2.py --escenario tuberias  # arranca ya con el escenario de tuberias (con el taladro)
+  python teleop_tron2.py --escenario tubo      # idem, con el tubo para colocar
   python teleop_tron2.py --camara2 --mxid ID_A ID_B   # fijando cual es cual (python camaras.py --listar)
   python teleop_tron2.py --proyector 0         # sin el proyector IR de las OAK-D Pro (por defecto al 70 %)
   python teleop_tron2.py --sin-hd              # sin el fotograma HD para las manos (si el USB no da)
@@ -37,7 +38,9 @@ Teclas (con la ventana de la camara seleccionada):
   m        modo espejo on/off (tu brazo izquierdo mueve el derecho del robot)
   g        dedos: imitacion pura <-> pinzas predefinidas (solo --orca)
   v        ver el robot desde detras / desde delante
-  1        escenario de tuberias: la primera vez lo hace aparecer; despues lo reinicia
+  1        escenario de tuberias con el TALADRO: interruptor (aparece / se quita)
+  2        escenario de tuberias con el TUBO para colocar: interruptor (aparece / se quita).
+           Con uno abierto, la otra tecla cambia de pieza. Para empezar de nuevo: dos veces
   flechas  (solo con el soporte KUKA) desplazar al robot: arriba/abajo = delante/atras del
            robot, izquierda/derecha = su izquierda/derecha. El robot NO gira nunca
   + / -    (solo con el soporte KUKA) subir / bajar al robot
@@ -400,7 +403,7 @@ def componer_vista(snap, estado, textos=None):
     if textos is None:      # una sola camara: todo en esta ventana
         textos = textos_hud(snap, estado, dos_ventanas=False)["A"]
     pintar_textos(img, *textos)
-    texto(img, "q salir | p pausa | c calibrar | r reposo | m espejo | g dedos | v vista | 1 tuberias"
+    texto(img, "q salir | p pausa | c calibrar | r reposo | m espejo | g dedos | v vista | 1 taladro | 2 tubo"
                + (" | flechas +/- KUKA" if estado.get("kuka") else ""),
           (10, h - 12), escala=0.42)
     return img
@@ -586,10 +589,10 @@ class Teleoperador:
             self._evento("modo_dedos", pinzas=self.estado["modo_dedos"] == "pinzas")
             self.estado["mensaje"] = f"Dedos: {self.estado['modo_dedos']}"
             self.t_mensaje = t0 + 2.0
-        elif tecla == ord("1") and self.escena is not None:
-            self.estado["mensaje"] = ("Escenario de tuberias reiniciado" if self.escena.activa
-                                      else "Escenario de tuberias")
-            self.escena.activar(visor)
+        elif tecla in (ord("1"), ord("2")) and self.escena is not None:
+            # interruptores del escenario de tuberias: 1 = con el taladro, 2 = con el tubo
+            pieza = "herramienta" if tecla == ord("1") else "tubo"
+            self.estado["mensaje"] = self.escena.alternar(pieza, visor)
             self.t_mensaje = t0 + 2.0
         elif tecla == ord("r"):
             self.reposo()
@@ -890,7 +893,8 @@ def main():
     ap.add_argument("--modelo", default="full", choices=["lite", "full", "heavy"])
     ap.add_argument("--sin-manos", action="store_true", help="no seguir las manos ni mover las pinzas")
     ap.add_argument("--sin-giro", action="store_true", help="no orientar la palma con la mano")
-    ap.add_argument("--escenario", choices=["tuberias"], default=None)
+    ap.add_argument("--escenario", choices=["tuberias", "taladro", "tubo"], default=None,
+                    help="arranca con el escenario de tuberias: con el taladro (tuberias o taladro) o con el tubo")
     ap.add_argument("--orca", action="store_true", help="OrcaHand en lugar de las pinzas")
     ap.add_argument("--camara2", action="store_true", help="usar dos OAK-D y fusionar las vistas")
     ap.add_argument("--sin-imu", action="store_true", help="no usar la IMU de las OAK-D")
@@ -972,9 +976,9 @@ def main():
             colocar_camara(v, robot, desde_detras)
             with v.lock():
                 v.opt.geomgroup[escenario_tuberias.GRUPO_ESCENARIO] = 0
-            if args.escenario == "tuberias":
+            if args.escenario is not None:
                 with control.lock:
-                    escena.activar(v)
+                    escena.activar(v, "tubo" if args.escenario == "tubo" else "herramienta")
             control.start()      # el robot va en su propio hilo; este solo dibuja y lee teclas
             while v.is_running():
                 t0 = time.monotonic()

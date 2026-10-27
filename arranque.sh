@@ -18,7 +18,7 @@ RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$RAIZ" || exit 1
 VENV="$RAIZ/.venv"
 PY="$VENV/bin/python"
-PAQUETES=("mujoco>=3.2" numpy "depthai>=3" mediapipe opencv-python)
+PAQUETES=("mujoco>=3.2" numpy "depthai>=3" mediapipe opencv-python pillow)
 
 # ----------------------------------------------------------------- colores
 if [ -t 1 ]; then
@@ -46,7 +46,8 @@ if [ ! -d "$VENV" ]; then
 else
     info "Entorno .venv/ encontrado"
     # por si se creo a medias o alguien lo ha tocado
-    if ! "$PY" -c "import mujoco, numpy, depthai, mediapipe, cv2" >/dev/null 2>&1; then
+    # (pillow: texturas de la decoracion Elecnor y de las tuberias)
+    if ! "$PY" -c "import mujoco, numpy, depthai, mediapipe, cv2, PIL" >/dev/null 2>&1; then
         aviso "Faltan dependencias en .venv/: las instalo"
         "$PY" -m pip install "${PAQUETES[@]}" || { error "Fallo al instalar las dependencias"; exit 1; }
     fi
@@ -65,7 +66,7 @@ WEBCAM_IDX=0
 SESION=""               # con CAMARAS=reproducir
 VELOCIDAD="1.0"
 ORCA=1
-ESCENARIO=0
+ESCENARIO="no"          # no | taladro | tubo
 MODELO="full"           # lite | full | heavy
 GRABAR=""
 GRABAR_VIDEO=0
@@ -81,6 +82,14 @@ SIN_ESTEREO_FINO=0
 SIN_EXTRINSECAS=0
 
 si_no() { [ "$1" = 1 ] && echo "${V}SI${R}" || echo "${D}no${R}"; }
+
+texto_escenario() {
+    case "$ESCENARIO" in
+        taladro) echo "${V}SI, con el taladro${R}" ;;
+        tubo)    echo "${V}SI, con el tubo para colocar${R}" ;;
+        *)       echo "${D}no${R}" ;;
+    esac
+}
 
 texto_camaras() {
     case "$CAMARAS" in
@@ -103,8 +112,8 @@ ${N}=====================================================================
        ${A}(sin montar_kuka.py en este proyecto: solo columna)${R}")
   2) Manos del robot ............... $([ "$ORCA" = 1 ] && echo "${V}OrcaHand${R}" || echo "${V}pinzas originales${R}")
        ${D}OrcaHand: dedos uno a uno (tecla g = pinzas predefinidas) | pinzas: solo abrir/cerrar${R}
-  3) Escenario de tuberias al inicio  $(si_no $ESCENARIO)
-       ${D}si no, aparece con la tecla 1 dentro del teleop${R}
+  3) Escenario de tuberias al inicio  $(texto_escenario)
+       ${D}no -> taladro -> tubo. Dentro del teleop: tecla 1 = con el taladro, 2 = con el tubo (interruptores)${R}
 
  ${N}Entrada del operador${R}
   4) Camaras ....................... ${V}$(texto_camaras)${R}
@@ -206,7 +215,7 @@ construir_args() {
         reproducir) ARGS+=(--reproducir "$SESION" --velocidad "$VELOCIDAD") ;;
     esac
     [ "$ORCA" = 1 ] && ARGS+=(--orca)
-    [ "$ESCENARIO" = 1 ] && ARGS+=(--escenario tuberias)
+    [ "$ESCENARIO" != "no" ] && ARGS+=(--escenario "$ESCENARIO")
     [ "$MODELO" != "full" ] && ARGS+=(--modelo "$MODELO")
     if [ -n "$GRABAR" ] && [ "$CAMARAS" != "reproducir" ]; then
         ARGS+=(--grabar "$GRABAR")
@@ -236,7 +245,7 @@ while true; do
                [ "$SOPORTE" = "kuka" ] && SOPORTE="columna" || SOPORTE="kuka"
            fi ;;
         2) ORCA=$((1 - ORCA)) ;;
-        3) ESCENARIO=$((1 - ESCENARIO)) ;;
+        3) case "$ESCENARIO" in no) ESCENARIO="taladro" ;; taladro) ESCENARIO="tubo" ;; *) ESCENARIO="no" ;; esac ;;
         4) elegir_camaras ;;
         5) case "$MODELO" in lite) MODELO="full" ;; full) MODELO="heavy" ;; *) MODELO="lite" ;; esac ;;
         6) elegir_grabacion ;;

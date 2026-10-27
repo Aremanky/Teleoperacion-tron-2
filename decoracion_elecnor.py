@@ -801,14 +801,103 @@ def _pale(d, pos):
     for yy in np.linspace(-0.35, 0.35, 5):                                # tablas de arriba
         d.caja((x, y + yy, 0.133), (0.60, 0.05, 0.011), MADERA)
     r = 0.0315
+    try:                         # tubos huecos con su campana (tuberias_pvc.py)
+        import tuberias_pvc
+        k_pvc = tuberias_pvc.Constructor(d, semilla=9) if tuberias_pvc.ACTIVA else None
+    except ImportError:
+        k_pvc = None
+    circulos = []                # seccion de los tubos (y, z, radio): por ella pasan los flejes
     for capa, n in enumerate((10, 9, 8)):
         z = 0.144 + r + capa * r * np.sqrt(3)
         for k in range(n):
             yy = (k - (n - 1) / 2) * 2 * r
-            d.cilindro((x - 0.59, y + yy, z), (x + 0.59, y + yy, z), r - 0.0005, PVC)
-    zt = 0.144 + 2 * r + 2 * r * np.sqrt(3) + 0.003                      # flejes naranjas
+            circulos.append((yy, z, r))
+            if k_pvc is None:
+                d.cilindro((x - 0.59, y + yy, z), (x + 0.59, y + yy, z), r - 0.0005, PVC)
+                continue
+            s = 1.0 if (k + capa) % 2 else -1.0          # campanas alternadas, como se apilan
+            R = r - 0.0005
+            boca = np.array([x + s * 0.59, y + yy, z])
+            k_pvc.tubo(np.array([x - s * 0.59, y + yy, z]), boca - np.array([s * 0.075, 0, 0]), R)
+            k_pvc.campana(boca, (s, 0.0, 0.0), R, L=0.09)
+    # flejes naranjas: rodean el haz de tubos tensados (se apoyan en los tubos de fuera y bajan
+    # en diagonal) y pasan por debajo de la tabla de arriba del pale, entre los tacos
+    tablero = (0.40, 0.122, 0.144)           # semiancho en y, cara de abajo y de arriba
     for xx in (-0.35, 0.35):
-        d.caja((x + xx, y, zt), (0.012, 10 * r - 0.04, 0.0015), NARANJA)
+        _fleje(d, (x + xx, y), circulos, tablero, sello_y=0.09 if xx > 0 else -0.09)
+
+
+FLEJE = dict(ancho=0.013, grosor=0.0011, holgura=0.0007)   # cinta de PP de 13 mm
+
+
+def _envolvente(puntos):
+    """Envolvente convexa 2D (cadena monotona), en sentido antihorario."""
+    P = sorted(set(map(tuple, np.round(puntos, 7))))
+    cruz = lambda o, a, b: (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    bajo, alto = [], []
+    for p in P:
+        while len(bajo) >= 2 and cruz(bajo[-2], bajo[-1], p) <= 0:
+            bajo.pop()
+        bajo.append(p)
+    for p in reversed(P):
+        while len(alto) >= 2 and cruz(alto[-2], alto[-1], p) <= 0:
+            alto.pop()
+        alto.append(p)
+    return np.array(bajo[:-1] + alto[:-1])
+
+
+def _fleje(d, pos, circulos, tablero, sello_y=0.0):
+    """Fleje cerrado en el plano y-z en x = pos[0]: la envolvente tensa de los tubos y del
+    tablero del pale (como queda una cinta apretada), hecha malla con algo de grosor, y su
+    sello metalico encima."""
+    x0, y0 = pos
+    h, w, t = FLEJE["holgura"], FLEJE["ancho"] / 2, FLEJE["grosor"]
+    ang = np.linspace(0, 2 * np.pi, 96, endpoint=False)
+    pts = [np.c_[cy + (r + h) * np.cos(ang), cz + (r + h) * np.sin(ang)] for cy, cz, r in circulos]
+    sy, z_bajo, z_alto = tablero
+    pts.append(np.array([[-sy - h, z_bajo - h], [sy + h, z_bajo - h], [sy + h, z_alto], [-sy - h, z_alto]]))
+    lazo = _envolvente(np.vstack(pts))
+    # normales hacia fuera en cada punto (media de los dos tramos que llegan a el)
+    n = len(lazo)
+    tan = np.array([_unit(np.r_[lazo[(i + 1) % n] - lazo[i], 0.0])[:2] for i in range(n)])
+    normal_seg = np.c_[tan[:, 1], -tan[:, 0]]               # hacia fuera (lazo antihorario)
+    normal = np.array([_unit(np.r_[normal_seg[i - 1] + normal_seg[i], 0.0])[:2] for i in range(n)])
+    m = _Malla()
+
+    def cara(p, nrm):                  # cuatro vertices con su normal propia (cara suave)
+        b = len(m.V)
+        for q, nq in zip(p, nrm):
+            m.V.append(np.asarray(q, dtype=float))
+            m.N.append(_unit(nq))
+            m.T.append((0.5, 0.5))
+        a0, a1, a2 = (m.V[b + k] for k in range(3))
+        media = sum(nrm) / 4
+        if np.dot(np.cross(a1 - a0, a2 - a0), media) < 0:
+            m.F += [(b, b + 2, b + 1), (b, b + 3, b + 2)]
+        else:
+            m.F += [(b, b + 1, b + 2), (b, b + 2, b + 3)]
+
+    P3 = lambda i, ex, off: np.array([ex, lazo[i % n][0] + normal[i % n][0] * off,
+                                      lazo[i % n][1] + normal[i % n][1] * off])
+    N3 = lambda i, s: np.array([0.0, s * normal[i % n][0], s * normal[i % n][1]])
+    for i in range(n):
+        j = i + 1
+        cara([P3(i, -w, t), P3(j, -w, t), P3(j, w, t), P3(i, w, t)], [N3(i, 1), N3(j, 1), N3(j, 1), N3(i, 1)])
+        cara([P3(i, -w, 0), P3(i, w, 0), P3(j, w, 0), P3(j, -w, 0)], [N3(i, -1), N3(i, -1), N3(j, -1), N3(j, -1)])
+        for ex in (-w, w):
+            nx = np.array([np.sign(ex), 0.0, 0.0])
+            cara([P3(i, ex, 0), P3(j, ex, 0), P3(j, ex, t), P3(i, ex, t)], [nx] * 4)
+    mat = d.material("fleje", NARANJA, spec=0.45, brillo=0.6)
+    d.malla("fleje", m, (x0, y0, 0.0), np.eye(3), material=mat)
+    # sello metalico: donde el fleje pasa por encima, cerca de sello_y
+    arriba = [i for i in range(n) if normal[i][1] > 0.5]
+    if arriba:
+        i = min(arriba, key=lambda k: abs(lazo[k][0] - sello_y))
+        tg = np.array([0.0, tan[i][0], tan[i][1]])
+        nn = np.array([0.0, normal[i][0], normal[i][1]])
+        R = np.column_stack([[1.0, 0.0, 0.0], tg, nn])
+        centro = np.array([x0, y0 + lazo[i][0], lazo[i][1]]) + nn * (t + 0.0012)
+        d.caja(centro, (w + 0.0015, 0.011, 0.0012), (0.70, 0.72, 0.74), R=R)
 
 
 def _caja_accesorios(d, pos, z0=0.0):

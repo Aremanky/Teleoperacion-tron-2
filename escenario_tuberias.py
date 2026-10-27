@@ -4,8 +4,13 @@ Escenario de montaje de tuberias de PVC para el TRON 2.
   - Techo con una red de tuberias ya instalada, colgada con varillas y abrazaderas.
   - La red va por DETRAS del robot; solo un tramo llega por delante y termina en un
     extremo libre al alcance del robot, marcado con un anillo: es el PUNTO DE CONEXION.
-  - En un banco de trabajo A LA DERECHA del robot hay una pieza suelta (el taladro,
-    o un tramo con codo de 90 grados y una copa (manguito) en cada extremo).
+  - En un banco de trabajo A LA DERECHA del robot hay una pieza suelta. Hay DOS, y el
+    escenario se abre con una u otra (en el teleop, teclas 1 y 2, que hacen de interruptor):
+      tecla 1 -> la HERRAMIENTA (el taladro, de RUTA_XML_PIEZA / RUTA_MALLA_PIEZA)
+      tecla 2 -> el TUBO para colocar: un tramo con codo de 90 grados y una copa (manguito)
+                 en cada extremo, que se instala en el punto de conexion
+    Las dos estan siempre en el modelo (un cuerpo mocap cada una); la que no esta en juego
+    se aparca bajo el suelo.
 
 La tarea: coger la pieza con una pinza (cerrar la mano cerca de ella), llevarla
 hasta el punto de conexion y encajar uno de sus extremos en el tubo del techo.
@@ -35,12 +40,42 @@ CAMBIOS (oct-2026, mesa):
   - Techo continuo (un plano que solo se ve desde abajo, para no tapar la camara del visor).
     Con la columna, a Z_TECHO = 1.85 m, al alcance para taladrarlo; con el KUKA, a
     Z_TECHO_KUKA = 2.60 m, y es el KUKA el que sube al robot hasta el (flechas y +/-).
+
+CAMBIOS (oct-2026, tuberias con detalle; ver tuberias_pvc.py):
+  - Los tubos ya no son cilindros macizos: son tubos HUECOS de PVC (pared de 3 mm, interior
+    oscuro, bisel en los extremos) con el marcaje impreso a lo largo. El extremo del punto de
+    conexion se ve abierto.
+  - Codos de verdad con sus copas (antes, esferas), copas de union en los tramos largos y los
+    extremos libres de la red suben al techo con un codo y un embellecedor.
+  - Abrazaderas isofonicas (banda naranja Elecnor con goma, orejetas y tornillos), varillas
+    roscadas con tuercas y etiquetas "EVACUACION" con el sentido del flujo.
+  - La pieza de PVC de la mesa (si se usa en lugar del taladro) se construye igual.
+  - Todo es estetico: TUBOS_TECHO, CONEXION_PUNTO, EXTREMOS... y la logica no cambian. Las
+    subidas al techo se guardan en RED_EXTRA y entran en la comprobacion del KUKA.
+  - Para volver a los cilindros de antes: TRON2_TUBERIAS_DETALLE=0
+
+CAMBIOS (oct-2026, interruptores):
+  - El modelo lleva las DOS piezas: la herramienta (cuerpo "herramienta_suelta", geoms
+    "herramienta_suelta_*") y el tubo (cuerpo "tubo_suelto", geoms "tubo_suelto_*"). Antes
+    habia una sola y cambiarla obligaba a editar RUTA_XML_PIEZA.
+  - EscenarioTuberias.alternar(pieza, visor): interruptor. Si el escenario ya esta abierto con
+    esa pieza, lo quita (oculta el grupo y libera la pieza y el techo del KUKA); si no, lo abre
+    con esa pieza (o cambia de pieza). activar(visor, pieza) y desactivar(visor) por separado.
+  - PIEZA_ENCAJA vale ahora solo para la herramienta (None = no se instala); el tubo siempre.
 """
 import os
 import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 
 import mujoco
 import numpy as np
+
+try:                    # tuberias con detalle (huecas, codos, abrazaderas...): tuberias_pvc.py
+    import tuberias_pvc
+except ImportError as _e:
+    print(f"[aviso] sin tuberias_pvc ({_e}): tuberias lisas")
+    tuberias_pvc = None
+TUBERIAS_DETALLADAS = tuberias_pvc is not None and tuberias_pvc.ACTIVA
 
 # =============================== GEOMETRIA ===================================
 R_TUBO = 0.020          # PVC de 40 mm
@@ -81,6 +116,8 @@ CODOS_TECHO = [((0.42, 0.80, 1.55), R_TUBO)]
 SEPARACION_SOPORTES = 0.60
 
 HOLGURA_KUKA = 0.05     # m: aviso al arrancar si una tuberia pasa mas cerca del KUKA
+RED_EXTRA = []          # tramos que anade la red con detalle (subidas al techo): (a, b, r).
+                        # Los rellena anadir_al_modelo(); entran en la comprobacion del KUKA.
 
 # ---------------- MESA (banco de trabajo a la DERECHA del robot) -----------------
 MESA_CENTRO = (0.15, -0.62)      # x, y del centro (antes 0.8, -0.22: delante del robot)
@@ -134,20 +171,22 @@ GIRO_PIEZA = (0.0, 0.0, 0.0)     # grados alrededor de x, y, z: como queda en la
                                  # (taladro: (0, 0, 0) = de pie con la broca hacia delante;
                                  #  (0, 0, 180) = broca hacia atras;
                                  #  (0, 0, 90) = broca hacia el robot, que esta a +y)
-PIEZA_ENCAJA = None              # None = solo el codo de PVC se "instala" en el tubo del techo
+PIEZA_ENCAJA = None              # la herramienta, se "instala" en el tubo del techo? (None = no;
+                                 # el tubo para colocar se instala siempre)
 
-# Pieza suelta: origen en el codo. Tramo 1 por +y local, tramo 2 por -z local.
-EXTREMOS = [  # (punto local, direccion hacia fuera)
+# El TUBO para colocar (tecla 2): origen en el codo. Tramo 1 por +y local, tramo 2 por -z local.
+EXTREMOS_TUBO = [  # (punto local, direccion hacia fuera)
     (np.array([0.0, L1, 0.0]), np.array([0.0, 1.0, 0.0])),
     (np.array([0.0, 0.0, -L2]), np.array([0.0, 0.0, -1.0])),
 ]
-# Sobre la mesa, tumbada: tramo 1 hacia +y del mundo (hacia el robot), tramo 2 hacia +x
-POS_INICIAL = np.array([MESA_CENTRO[0] + PIEZA_EN_MESA[0] - 0.10,
-                        MESA_CENTRO[1] + PIEZA_EN_MESA[1] - 0.12,
-                        MESA_ALTO + R_COPA])
-ROT_INICIAL = np.array([[0.0, 0.0, -1.0],
-                        [0.0, 1.0, 0.0],
-                        [1.0, 0.0, 0.0]])
+# Sobre la mesa, tumbado: tramo 1 hacia +y del mundo (hacia el robot), tramo 2 hacia +x
+POS_INICIAL_TUBO = np.array([MESA_CENTRO[0] + PIEZA_EN_MESA[0] - 0.10,
+                             MESA_CENTRO[1] + PIEZA_EN_MESA[1] - 0.12,
+                             MESA_ALTO + R_COPA])
+ROT_INICIAL_TUBO = np.array([[0.0, 0.0, -1.0],
+                             [0.0, 1.0, 0.0],
+                             [1.0, 0.0, 0.0]])
+APARCAMIENTO = np.array([0.0, 0.0, -30.0])   # donde se aparca la pieza que no esta en juego
 
 
 def _leer_vertices(ruta):
@@ -193,7 +232,7 @@ ESPERA_SUELO = 1.0       # s que se queda en el suelo antes de reaparecer en la 
 
 # Grupo de visualizacion de MuJoCo donde van todos los geoms del escenario.
 # El escenario siempre esta en el modelo, pero oculto hasta que se activa
-# (tecla 1 en la ventana de la camara), que enciende este grupo en el visor.
+# (teclas 1 y 2 en la ventana de la camara), que encienden y apagan este grupo en el visor.
 GRUPO_ESCENARIO = 5
 
 # =============================== COLORES =====================================
@@ -423,7 +462,14 @@ elif RUTA_MALLA_PIEZA:
           f"{np.round(_medidas, 4)} (sus unidades) | escala {ESCALA_REAL:.5g} -> "
           f"{np.round(2 * _semi * 100, 1)} cm")
 
-if ESQUINAS_PIEZA is not None:
+# Las piezas del escenario. Cada una: clave, tecla, nombre, cuerpo mocap y prefijo de sus geoms
+# (la logica los busca asi), extremos [(punto, direccion hacia fuera)], segmento de agarre (o
+# None: se coge por sus tramos), caja que ocupa (o None), pose inicial en la mesa y si encaja.
+PIEZAS = {"tubo": SimpleNamespace(
+    clave="tubo", tecla="2", nombre="Tubo", cuerpo="tubo_suelto", prefijo="tubo_suelto_",
+    extremos=EXTREMOS_TUBO, segmento=None, esquinas=None,
+    pos0=POS_INICIAL_TUBO, rot0=ROT_INICIAL_TUBO, encaja=True)}
+if ESQUINAS_PIEZA is not None:                        # la herramienta (taladro o malla propia)
     if SEGMENTO_AGARRE is None:                       # se coge por su eje mas largo
         _c = ESQUINAS_PIEZA.mean(axis=0)
         _semi = (ESQUINAS_PIEZA.max(axis=0) - ESQUINAS_PIEZA.min(axis=0)) / 2
@@ -431,11 +477,17 @@ if ESQUINAS_PIEZA is not None:
         SEGMENTO_AGARRE = (_c - _u, _c + _u)
     _a, _b = (np.asarray(x, dtype=float) for x in SEGMENTO_AGARRE)
     SEGMENTO_AGARRE = (_a, _b)
-    EXTREMOS = [(_b, _unit(_b - _a)), (_a, _unit(_a - _b))]
-    ROT_INICIAL = _rot_xyz(GIRO_PIEZA)
-    POS_INICIAL = _apoyar_en_mesa(ESQUINAS_PIEZA, ROT_INICIAL)
-if PIEZA_ENCAJA is None:
-    PIEZA_ENCAJA = ESQUINAS_PIEZA is None
+    _rot = _rot_xyz(GIRO_PIEZA)
+    PIEZAS["herramienta"] = SimpleNamespace(
+        clave="herramienta", tecla="1", nombre=NOMBRE_PIEZA, cuerpo="herramienta_suelta",
+        prefijo="herramienta_suelta_", extremos=[(_b, _unit(_b - _a)), (_a, _unit(_a - _b))],
+        segmento=SEGMENTO_AGARRE, esquinas=ESQUINAS_PIEZA,
+        pos0=_apoyar_en_mesa(ESQUINAS_PIEZA, _rot), rot0=_rot, encaja=bool(PIEZA_ENCAJA))
+PIEZA_INICIAL = "herramienta" if "herramienta" in PIEZAS else "tubo"
+# Compatibilidad (lo de antes, de la pieza por defecto)
+EXTREMOS = PIEZAS[PIEZA_INICIAL].extremos
+POS_INICIAL, ROT_INICIAL = PIEZAS[PIEZA_INICIAL].pos0, PIEZAS[PIEZA_INICIAL].rot0
+PIEZA_ENCAJA = PIEZAS[PIEZA_INICIAL].encaja
 
 
 # =============================== XML =========================================
@@ -671,7 +723,7 @@ def _anadir_mesa(root, geom):
 
 def anadir_al_modelo(root):
     """Anade el escenario al arbol XML del robot (se llama al cargar el modelo)."""
-    global z_techo
+    global z_techo, RED_EXTRA
     mundo = root.find("worldbody")
     # con el KUKA (montar_kuka.py lo monta antes que el escenario) el techo va alto
     hay_kuka = any(b.get("name") == "kuka_soporte" for b in root.iter("body"))
@@ -690,20 +742,25 @@ def anadir_al_modelo(root):
          quat="0 1 0 0", size=((x1 - x0) / 2, (y1 - y0) / 2, 0.1), rgba=TECHO)
 
     # red instalada, con varillas roscadas y abrazaderas naranjas
-    for i, (a, b, r) in enumerate(TUBOS_TECHO):
-        a, b = np.array(a), np.array(b)
-        geom(mundo, name=f"tubo_techo_{i}", type="cylinder", fromto=np.r_[a, b], size=r, rgba=PVC)
-        largo = np.linalg.norm(b - a)
-        eje = (b - a) / largo
-        n = max(1, int(largo // SEPARACION_SOPORTES))
-        for k in range(n):
-            c = a + eje * (largo * (k + 0.5) / n)
-            geom(mundo, type="cylinder", fromto=np.r_[c + [0, 0, r], [c[0], c[1], z_techo]],
-                 size=0.004, rgba=VARILLA)
-            geom(mundo, type="cylinder", fromto=np.r_[c - eje * 0.012, c + eje * 0.012],
-                 size=r + 0.006, rgba=ABRAZADERA)
-    for c, r in CODOS_TECHO:
-        geom(mundo, type="sphere", pos=c, size=r + 0.006, rgba=PVC_COPA)
+    RED_EXTRA = []
+    if TUBERIAS_DETALLADAS:        # tubos huecos, codos, abrazaderas isofonicas... (tuberias_pvc.py)
+        RED_EXTRA = tuberias_pvc.anadir_red(root, TUBOS_TECHO, CODOS_TECHO, z_techo, CONEXION_PUNTO,
+                                            GRUPO_ESCENARIO, SEPARACION_SOPORTES)
+    else:                          # cilindros lisos (como antes)
+        for i, (a, b, r) in enumerate(TUBOS_TECHO):
+            a, b = np.array(a), np.array(b)
+            geom(mundo, name=f"tubo_techo_{i}", type="cylinder", fromto=np.r_[a, b], size=r, rgba=PVC)
+            largo = np.linalg.norm(b - a)
+            eje = (b - a) / largo
+            n = max(1, int(largo // SEPARACION_SOPORTES))
+            for k in range(n):
+                c = a + eje * (largo * (k + 0.5) / n)
+                geom(mundo, type="cylinder", fromto=np.r_[c + [0, 0, r], [c[0], c[1], z_techo]],
+                     size=0.004, rgba=VARILLA)
+                geom(mundo, type="cylinder", fromto=np.r_[c - eje * 0.012, c + eje * 0.012],
+                     size=r + 0.006, rgba=ABRAZADERA)
+        for c, r in CODOS_TECHO:
+            geom(mundo, type="sphere", pos=c, size=r + 0.006, rgba=PVC_COPA)
 
     # anillo que marca el punto de conexion
     p = CONEXION_PUNTO - CONEXION_EJE * 0.02
@@ -714,48 +771,59 @@ def anadir_al_modelo(root):
     # mesa (banco de trabajo a la derecha del robot)
     _anadir_mesa(root, geom)
 
-    # pieza suelta: cuerpo mocap (se coloca a mano desde Python en cada ciclo)
-    pieza = ET.SubElement(mundo, "body", {"name": "tubo_suelto", "mocap": "true",
-                                          "pos": _f(POS_INICIAL), "quat": _f(mat_a_quat(ROT_INICIAL))})
-    if PIEZA_XML is not None:      # pieza de un .xml (p.ej. el taladro): sus geoms visuales
-        mallas, geoms_xml = PIEZA_XML
-        asset = root.find("asset")
-        if asset is None:
-            asset = ET.SubElement(root, "asset")
-        for nombre, atr in mallas.items():
-            ET.SubElement(asset, "mesh", dict(atr, name="pieza_" + nombre))
-        for k, g in enumerate(geoms_xml):
-            # el nombre debe empezar por "tubo_suelto_" (asi la logica la reconoce)
-            kw = dict(name=f"tubo_suelto_{k}", type=g["tipo"], rgba=g["rgba"] or COLOR_PIEZA, mass="0")
-            if g["malla"]:
-                kw["mesh"] = "pieza_" + g["malla"]
-            if g["size"]:
-                kw["size"] = g["size"]
-            if g["fromto"] is not None:
-                kw["fromto"] = g["fromto"]
-            else:
-                kw["pos"], kw["quat"] = g["P"], mat_a_quat(g["R"])
-            geom(pieza, **kw)
+    # piezas sueltas: un cuerpo mocap por pieza (se colocan a mano desde Python en cada ciclo).
+    # Las dos estan siempre; la que no esta en juego se aparca bajo el suelo (EscenarioTuberias).
+    asset = root.find("asset")
+    if asset is None:
+        asset = ET.SubElement(root, "asset")
+
+    def cuerpo(pz):
+        return ET.SubElement(mundo, "body", {"name": pz.cuerpo, "mocap": "true",
+                                             "pos": _f(pz.pos0), "quat": _f(mat_a_quat(pz.rot0))})
+
+    # la herramienta (tecla 1): el taladro de un .xml o una malla propia
+    if "herramienta" in PIEZAS:
+        pz = PIEZAS["herramienta"]
+        pieza = cuerpo(pz)
+        if PIEZA_XML is not None:      # pieza de un .xml (p.ej. el taladro): sus geoms visuales
+            mallas, geoms_xml = PIEZA_XML
+            for nombre, atr in mallas.items():
+                ET.SubElement(asset, "mesh", dict(atr, name="pieza_" + nombre))
+            for k, g in enumerate(geoms_xml):
+                # el nombre debe empezar por el prefijo de la pieza (asi la logica la reconoce)
+                kw = dict(name=f"{pz.prefijo}{k}", type=g["tipo"], rgba=g["rgba"] or COLOR_PIEZA, mass="0")
+                if g["malla"]:
+                    kw["mesh"] = "pieza_" + g["malla"]
+                if g["size"]:
+                    kw["size"] = g["size"]
+                if g["fromto"] is not None:
+                    kw["fromto"] = g["fromto"]
+                else:
+                    kw["pos"], kw["quat"] = g["P"], mat_a_quat(g["R"])
+                geom(pieza, **kw)
+        else:                          # modelo propio: una malla
+            ET.SubElement(asset, "mesh", {"name": "pieza_propia",
+                                          "file": os.path.abspath(RUTA_MALLA_PIEZA),
+                                          "scale": _f([ESCALA_REAL] * 3)})
+            # el nombre debe empezar por el prefijo de la pieza (asi se pinta de verde al encajar)
+            geom(pieza, name=f"{pz.prefijo}malla", type="mesh", mesh="pieza_propia",
+                 pos=MALLA_POS, rgba=COLOR_PIEZA)
+
+    # el tubo para colocar (tecla 2): codo de PVC con un tramo y un manguito a cada lado
+    pz = PIEZAS["tubo"]
+    pieza = cuerpo(pz)
+    if TUBERIAS_DETALLADAS:     # hueco, como la red del techo (tuberias_pvc.py)
+        tuberias_pvc.pieza_codo(root, pieza, R_TUBO, R_COPA, LARGO_COPA, pz.extremos, GRUPO_ESCENARIO,
+                                prefijo=pz.prefijo)
         return
-    if RUTA_MALLA_PIEZA:     # modelo propio: una malla en lugar de los cilindros
-        asset = root.find("asset")
-        if asset is None:
-            asset = ET.SubElement(root, "asset")
-        ET.SubElement(asset, "mesh", {"name": "pieza_propia",
-                                      "file": os.path.abspath(RUTA_MALLA_PIEZA),
-                                      "scale": _f([ESCALA_REAL] * 3)})
-        # el nombre debe empezar por "tubo_suelto_" (asi se pinta de verde al encajar)
-        geom(pieza, name="tubo_suelto_malla", type="mesh", mesh="pieza_propia",
-             pos=MALLA_POS, rgba=COLOR_PIEZA)
-        return
-    geom(pieza, name="tubo_suelto_codo", type="sphere", pos=(0, 0, 0), size=R_COPA + 0.003, rgba=PVC_COPA)
-    for k, (punto, eje) in enumerate(EXTREMOS):
+    geom(pieza, name=f"{pz.prefijo}codo", type="sphere", pos=(0, 0, 0), size=R_COPA + 0.003, rgba=PVC_COPA)
+    for k, (punto, eje) in enumerate(pz.extremos):
         largo = np.linalg.norm(punto)
-        geom(pieza, name=f"tubo_suelto_tramo{k}", type="cylinder",
+        geom(pieza, name=f"{pz.prefijo}tramo{k}", type="cylinder",
              fromto=np.r_[[0, 0, 0], eje * (largo - LARGO_COPA)], size=R_TUBO, rgba=PVC)
-        geom(pieza, name=f"tubo_suelto_copa{k}", type="cylinder",
+        geom(pieza, name=f"{pz.prefijo}copa{k}", type="cylinder",
              fromto=np.r_[eje * (largo - LARGO_COPA), eje * largo], size=R_COPA, rgba=PVC_COPA)
-        geom(pieza, name=f"tubo_suelto_copacodo{k}", type="cylinder",
+        geom(pieza, name=f"{pz.prefijo}copacodo{k}", type="cylinder",
              fromto=np.r_[[0, 0, 0], eje * 0.035], size=R_COPA, rgba=PVC_COPA)
 
 
@@ -764,14 +832,18 @@ class EscenarioTuberias:
     def __init__(self, robot):
         m, d = robot.m, robot.d
         self.m, self.d = m, d
-        cuerpo = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "tubo_suelto")
-        if cuerpo < 0:
-            raise RuntimeError("El modelo no tiene el escenario de tuberias cargado")
-        self.id_mocap = int(m.body_mocapid[cuerpo])
+        # cada pieza del modelo con su mocap, sus geoms y sus colores (para el destello)
+        self.piezas = {}
+        for clave, pz in PIEZAS.items():
+            cuerpo = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, pz.cuerpo)
+            if cuerpo < 0:
+                raise RuntimeError(f"El modelo no tiene el escenario de tuberias cargado (falta '{pz.cuerpo}')")
+            geoms = [g for g in range(m.ngeom)
+                     if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or "").startswith(pz.prefijo)]
+            self.piezas[clave] = SimpleNamespace(**vars(pz), id_mocap=int(m.body_mocapid[cuerpo]),
+                                                 geoms=geoms, rgba=m.geom_rgba[geoms].copy())
+        self.pz = self.piezas[PIEZA_INICIAL]      # la pieza en juego
         self.g_anillo = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "punto_conexion")
-        self.g_pieza = [g for g in range(m.ngeom)
-                        if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or "").startswith("tubo_suelto_")]
-        self.rgba_pieza = m.geom_rgba[self.g_pieza].copy()
         self._informar_malla()
         self._comprobar_alcance(robot)
         self._comprobar_kuka()
@@ -780,8 +852,13 @@ class EscenarioTuberias:
         self.activa = False             # oculto y sin efecto hasta que se active
         self.reiniciar()
 
+    @property
+    def pieza(self):
+        """Clave de la pieza en juego: "herramienta" o "tubo"."""
+        return self.pz.clave
+
     def _comprobar_alcance(self, robot, lado="R"):
-        """Imprime a que distancia queda el punto de agarre de la pieza del hombro del
+        """Imprime a que distancia queda el punto de agarre de cada pieza del hombro del
         brazo que la va a coger, comparada con el alcance hombro-muneca de ese brazo.
         Es orientativo: la mano anade unos centimetros mas de alcance."""
         try:
@@ -790,19 +867,20 @@ class EscenarioTuberias:
             alcance = float(brazo.L_brazo + brazo.L_antebrazo)
         except (AttributeError, KeyError, TypeError):
             return
-        if SEGMENTO_AGARRE is not None:
-            objetivo = POS_INICIAL + ROT_INICIAL @ ((SEGMENTO_AGARRE[0] + SEGMENTO_AGARRE[1]) / 2)
-        else:
-            objetivo = POS_INICIAL.copy()
-        dist = float(np.linalg.norm(objetivo - hombro))
-        r = dist / max(alcance, 1e-9)
         nombre = {"L": "izquierdo", "R": "derecho"}.get(lado, lado)
-        print(f"Mesa en ({MESA_CENTRO[0]:+.2f}, {MESA_CENTRO[1]:+.2f}) m | {NOMBRE_PIEZA} a "
-              f"{dist * 100:.0f} cm del hombro {nombre} (alcance hombro-muneca {alcance * 100:.0f} cm, "
-              f"{r * 100:.0f} %)")
-        if r > 0.92:
-            print(f"[aviso] la pieza queda casi al limite del brazo {nombre}: acerca la mesa "
-                  f"(sube MESA_CENTRO[1] hacia 0) o sube PIEZA_EN_MESA[1]")
+        for pz in self.piezas.values():
+            if pz.segmento is not None:
+                objetivo = pz.pos0 + pz.rot0 @ ((pz.segmento[0] + pz.segmento[1]) / 2)
+            else:
+                objetivo = pz.pos0.copy()
+            dist = float(np.linalg.norm(objetivo - hombro))
+            r = dist / max(alcance, 1e-9)
+            print(f"Mesa en ({MESA_CENTRO[0]:+.2f}, {MESA_CENTRO[1]:+.2f}) m | {pz.nombre} (tecla {pz.tecla}) a "
+                  f"{dist * 100:.0f} cm del hombro {nombre} (alcance hombro-muneca {alcance * 100:.0f} cm, "
+                  f"{r * 100:.0f} %)")
+            if r > 0.92:
+                print(f"[aviso] {pz.nombre} queda casi al limite del brazo {nombre}: acerca la mesa "
+                      f"(sube MESA_CENTRO[1] hacia 0) o sube PIEZA_EN_MESA[1]")
         # techo: hasta donde sube la muneca con el brazo hacia arriba (el seguimiento comprime
         # el brazo a partir del 92 % de su alcance), mas la mano
         muneca_max = float(hombro[2]) + 0.92 * alcance
@@ -834,7 +912,7 @@ class EscenarioTuberias:
             puntos.append(v[::4] @ d.geom_xmat[g].reshape(3, 3).T + d.geom_xpos[g])
         P = np.vstack(puntos)
         problemas = []
-        for i, (a, b, r) in enumerate(TUBOS_TECHO):
+        for i, (a, b, r) in enumerate(list(TUBOS_TECHO) + list(RED_EXTRA)):   # + subidas al techo
             a, b = np.array(a, float), np.array(b, float)
             ab = b - a
             t = np.clip((P - a) @ ab / (ab @ ab), 0.0, 1.0)
@@ -853,7 +931,10 @@ class EscenarioTuberias:
     def _informar_malla(self):
         """Con un modelo propio, imprime la caja que ocupa tal y como la ha cargado
         MuJoCo, en las coordenadas de la pieza (comprobacion del centrado y la escala)."""
-        g = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_GEOM, "tubo_suelto_malla")
+        pz = self.piezas.get("herramienta")
+        if pz is None:
+            return
+        g = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_GEOM, f"{pz.prefijo}malla")
         if g < 0:
             return
         mid = int(self.m.geom_dataid[g])
@@ -867,8 +948,29 @@ class EscenarioTuberias:
               f"z [{v[:, 2].min():+.3f}, {v[:, 2].max():+.3f}]\n"
               f"   (comprobacion: deberia salir centrada en 0 y con medidas de centimetros)\n")
 
-    def activar(self, visor=None):
-        """Muestra el escenario (o lo reinicia si ya estaba a la vista)."""
+    # ---------------------------------------------------------------- interruptores
+    def _clave(self, pieza):
+        """Clave valida: sin herramienta configurada (RUTA_XML_PIEZA y RUTA_MALLA_PIEZA a None),
+        las dos teclas usan el tubo."""
+        if pieza is None:
+            return self.pz.clave
+        return pieza if pieza in self.piezas else "tubo"
+
+    def alternar(self, pieza, visor=None):
+        """Interruptor (teclas 1 y 2 del teleop). Si el escenario esta abierto con esa pieza,
+        lo quita; si no, lo abre con ella (o cambia a ella). Devuelve el mensaje para el HUD."""
+        clave = self._clave(pieza)
+        if self.activa and self.pz.clave == clave:
+            self.desactivar(visor)
+            return "Escenario de tuberias: quitado"
+        cambio = self.activa
+        self.activar(visor, clave)
+        return f"Escenario de tuberias {'-> ' if cambio else ''}con {self.pz.nombre.lower()}"
+
+    def activar(self, visor=None, pieza=None):
+        """Muestra el escenario con la pieza dada ("herramienta" o "tubo"; None = la de antes)
+        y lo deja como al principio."""
+        self.pz = self.piezas[self._clave(pieza)]
         self.activa = True
         self.reiniciar()
         if self.kuka is not None and getattr(self.kuka, "disponible", False):
@@ -879,9 +981,26 @@ class EscenarioTuberias:
             with visor.lock():
                 visor.opt.geomgroup[GRUPO_ESCENARIO] = 1
 
+    def desactivar(self, visor=None):
+        """Quita el escenario: lo oculta, suelta la pieza (sin efecto en las manos) y el KUKA
+        deja de tener techo."""
+        self.activa = False
+        self.reiniciar()
+        if self.kuka is not None and getattr(self.kuka, "disponible", False):
+            self.kuka.techo = None
+        if visor is not None:
+            with visor.lock():
+                visor.opt.geomgroup[GRUPO_ESCENARIO] = 0
+
     # ---------------------------------------------------------------- estado
     def reiniciar(self):
-        self.p, self.R = POS_INICIAL.copy(), ROT_INICIAL.copy()
+        """La pieza en juego vuelve a la mesa; las demas, al aparcamiento (bajo el suelo)."""
+        for pz in self.piezas.values():
+            self.m.geom_rgba[pz.geoms] = pz.rgba
+            if pz is not self.pz:
+                self.d.mocap_pos[pz.id_mocap] = APARCAMIENTO
+                self.d.mocap_quat[pz.id_mocap] = (1.0, 0.0, 0.0, 0.0)
+        self.p, self.R = self.pz.pos0.copy(), self.pz.rot0.copy()
         self.estado = "mesa"            # mesa | sujeta | cayendo | suelo | instalada
         self.sujeta = None              # lado del robot que la lleva
         self.rel_p = self.rel_R = None
@@ -890,13 +1009,12 @@ class EscenarioTuberias:
         self.armado = {"L": True, "R": True}
         self.dist = self.ang = None
         self.t_destello = 0.0
-        self.m.geom_rgba[self.g_pieza] = self.rgba_pieza
         self._pintar_anillo(ANILLO_LEJOS)
         self._escribir()
 
     def _volver_a_la_mesa(self):
         """Reaparece en su sitio de la mesa, sin tocar lo ya instalado."""
-        self.p, self.R = POS_INICIAL.copy(), ROT_INICIAL.copy()
+        self.p, self.R = self.pz.pos0.copy(), self.pz.rot0.copy()
         self.estado, self.sujeta, self.vz = "mesa", None, 0.0
         self._escribir()
 
@@ -906,10 +1024,10 @@ class EscenarioTuberias:
 
     # ---------------------------------------------------------------- geometria
     def _segmentos(self):
-        if SEGMENTO_AGARRE is not None:
-            a, b = SEGMENTO_AGARRE
+        if self.pz.segmento is not None:
+            a, b = self.pz.segmento
             return [(self.p + self.R @ a, self.p + self.R @ b)]
-        return [(self.p, self.p + self.R @ punto) for punto, _ in EXTREMOS]
+        return [(self.p, self.p + self.R @ punto) for punto, _ in self.pz.extremos]
 
     def _mas_cercano(self, q):
         mejores = [_punto_segmento(q, a, b) for a, b in self._segmentos()]
@@ -919,7 +1037,7 @@ class EscenarioTuberias:
     def _mejor_extremo(self):
         """Extremo de la pieza mas cercano a encajar: (indice, distancia, angulo)."""
         mejor = None
-        for k, (punto, eje) in enumerate(EXTREMOS):
+        for k, (punto, eje) in enumerate(self.pz.extremos):
             pe = self.p + self.R @ punto
             ang = np.degrees(np.arccos(np.clip(np.dot(self.R @ eje, -CONEXION_EJE), -1, 1)))
             dist = float(np.linalg.norm(pe - CONEXION_PUNTO))
@@ -931,25 +1049,24 @@ class EscenarioTuberias:
     def _encajar(self, k):
         """Coloca la pieza exactamente encajada por su extremo k (conserva el giro
         alrededor del eje del tubo, como pasa con un manguito de PVC real)."""
-        punto, eje = EXTREMOS[k]
+        punto, eje = self.pz.extremos[k]
         self.R = rot_entre(self.R @ eje, -CONEXION_EJE) @ self.R
         destino = CONEXION_PUNTO - CONEXION_EJE * SOLAPE
         self.p = destino - self.R @ punto
 
     def _altura_apoyo(self):
         """Altura de la mesa si la pieza esta encima de ella; si no, el suelo."""
-        if ESQUINAS_PIEZA is not None:
-            c = self.p + self.R @ ESQUINAS_PIEZA.mean(axis=0)
-            dentro = (abs(c[0] - MESA_CENTRO[0]) < MESA_MEDIO[0] and abs(c[1] - MESA_CENTRO[1]) < MESA_MEDIO[1])
-            return MESA_ALTO if dentro else 0.0
-        c = self.p + self.R @ (sum(p for p, _ in EXTREMOS) / (len(EXTREMOS) + 1))
+        if self.pz.esquinas is not None:
+            c = self.p + self.R @ self.pz.esquinas.mean(axis=0)
+        else:
+            c = self.p + self.R @ (sum(p for p, _ in self.pz.extremos) / (len(self.pz.extremos) + 1))
         dentro = (abs(c[0] - MESA_CENTRO[0]) < MESA_MEDIO[0] and abs(c[1] - MESA_CENTRO[1]) < MESA_MEDIO[1])
         return MESA_ALTO if dentro else 0.0
 
     def _z_minima(self):
-        if ESQUINAS_PIEZA is not None:   # pieza propia: su caja, girada como este la pieza
-            return float(min((self.p + self.R @ c)[2] for c in ESQUINAS_PIEZA))
-        puntos = [self.p] + [self.p + self.R @ p for p, _ in EXTREMOS]
+        if self.pz.esquinas is not None:   # su caja, girada como este la pieza
+            return float(min((self.p + self.R @ c)[2] for c in self.pz.esquinas))
+        puntos = [self.p] + [self.p + self.R @ p for p, _ in self.pz.extremos]
         return min(q[2] for q in puntos) - R_COPA
 
     # ---------------------------------------------------------------- ciclo
@@ -966,7 +1083,7 @@ class EscenarioTuberias:
             if self.t_destello > 0:
                 self.t_destello -= dt
                 if self.t_destello <= 0:
-                    self.m.geom_rgba[self.g_pieza] = self.rgba_pieza
+                    self.m.geom_rgba[self.pz.geoms] = self.pz.rgba
             return
 
         if self.sujeta is None:
@@ -1008,12 +1125,12 @@ class EscenarioTuberias:
                 self.p = brazo.punto_agarre() + Rg @ self.rel_p
                 self.R = Rg @ self.rel_R
 
-        if self.estado == "sujeta" and PIEZA_ENCAJA:
+        if self.estado == "sujeta" and self.pz.encaja:
             k, self.dist, self.ang = self._mejor_extremo()
             if self.dist < TOL_POS and self.ang < TOL_ANG:
                 self._encajar(k)
                 self.estado, self.sujeta = "instalada", None
-                self.m.geom_rgba[self.g_pieza] = DESTELLO
+                self.m.geom_rgba[self.pz.geoms] = DESTELLO
                 self.t_destello = 1.2
                 self._pintar_anillo(ANILLO_HECHO)
             else:
@@ -1028,24 +1145,25 @@ class EscenarioTuberias:
             self.m.geom_rgba[self.g_anillo] = rgba
 
     def _escribir(self):
-        self.d.mocap_pos[self.id_mocap] = self.p
-        self.d.mocap_quat[self.id_mocap] = mat_a_quat(self.R)
+        self.d.mocap_pos[self.pz.id_mocap] = self.p
+        self.d.mocap_quat[self.pz.id_mocap] = mat_a_quat(self.R)
 
     # ---------------------------------------------------------------- texto
     def texto(self):
         if not self.activa:
             return ""
         nombres = {"L": "IZQ", "R": "DER"}
+        nombre, tecla = self.pz.nombre, self.pz.tecla
         if self.estado == "instalada":
-            return f"{NOMBRE_PIEZA}: INSTALADA  (1 = empezar de nuevo)"
+            return f"{nombre}: INSTALADO  ({tecla} dos veces = empezar de nuevo)"
         if self.estado == "sujeta":
-            s = f"{NOMBRE_PIEZA}: en la mano {nombres[self.sujeta]}"
+            s = f"{nombre}: en la mano {nombres[self.sujeta]}"
             if self.dist is not None:
                 s += f" | conexion a {self.dist * 100:4.1f} cm, {self.ang:3.0f} deg"
                 s += f" (encaja < {TOL_POS * 100:.0f} cm y < {TOL_ANG:.0f} deg)"
             return s
         if self.estado == "cayendo":
-            return f"{NOMBRE_PIEZA}: cayendo"
+            return f"{nombre}: cayendo"
         if self.estado == "suelo":
-            return f"{NOMBRE_PIEZA}: se ha caido al suelo, vuelve a la mesa..."
-        return f"{NOMBRE_PIEZA}: en la mesa  (cierra la mano junto a ella para cogerla)"
+            return f"{nombre}: se ha caido al suelo, vuelve a la mesa..."
+        return f"{nombre}: en la mesa  (cierra la mano junto a el para cogerlo | {tecla} = quitar)"
